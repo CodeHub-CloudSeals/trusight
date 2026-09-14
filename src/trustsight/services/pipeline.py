@@ -21,6 +21,7 @@ from ..engine.calculator import RebarCalculator
 from ..engine.rulebook import Rulebook
 from ..engine.spatial import build_scene
 from ..evidence.fabric import ClaimType, EvidenceChain
+from ..extraction import playbooks
 from ..extraction.drawings import read_pile_project
 from ..graph.knowledge_graph import ProjectKnowledgeGraph
 from ..knowledge.project import ProjectKnowledge, Scope
@@ -63,6 +64,24 @@ class PipelineContext:
     questions: list[dict[str, Any]] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
     demo_scenario: str = "clarification"
+    #: which playbook read this document set; None until extraction runs
+    playbook: str | None = None
+
+    @property
+    def primary_document(self) -> Path:
+        """The sheet to render and cite.
+
+        ``document`` may be the whole drawing set, because an element's
+        instance count can depend on how many documents describe it. Anything
+        that needs a single renderable PDF — the viewer, the page count —
+        asks for this instead.
+        """
+        if self.document.is_dir():
+            found = (sorted(self.document.glob("Input*.pdf"))
+                     or sorted(self.document.glob("*.pdf")))
+            if found:
+                return found[0]
+        return self.document
 
 
 def _apply_known(ctx: PipelineContext, element: Element) -> int:
@@ -151,7 +170,19 @@ def build_runner(ctx: PipelineContext, *, strict: bool = False) -> WorkflowRunne
 
     @runner.handler("extraction")
     def _extract(run: Run) -> dict[str, Any]:
-        result = read_pile_project(ctx.document, ctx.project_id)
+        # The playbook is chosen from what the set actually contains. An
+        # unrecognised set is reported as unreadable rather than run through
+        # the nearest reader and returned as an empty drawing.
+        try:
+            result, playbook = playbooks.read(ctx.document, ctx.project_id)
+        except playbooks.NoPlaybook as exc:
+            ctx.unresolved.append(str(exc))
+            run.context["elements"] = []
+            return {"facts": 0, "elements": 0, "playbook": None,
+                    "_metrics": {"pages_or_items_processed": 0,
+                                 "values_extracted": 0,
+                                 "exceptions_raised": 1}}
+        ctx.playbook = playbook.name
         ctx.unresolved.extend(result.unresolved)
         for fact in result.facts:
             ctx.chain.append(
@@ -165,6 +196,7 @@ def build_runner(ctx: PipelineContext, *, strict: bool = False) -> WorkflowRunne
         return {
             "facts": len(result.facts),
             "elements": len(result.elements),
+            "playbook": playbook.name,
             "_metrics": {
                 "pages_or_items_processed": result.pages_processed,
                 "values_extracted": result.values_extracted,
@@ -185,7 +217,7 @@ def build_runner(ctx: PipelineContext, *, strict: bool = False) -> WorkflowRunne
                 subject=element.identity.key(),
                 value={"source": element.sheets[0].cite() if element.sheets else None},
                 source=element.sheets[0] if element.sheets else None,
-                produced_by="drawings.read_pile_project",
+                produced_by=f"extraction.{ctx.playbook}",
             )
             ctx.chain.append(
                 claim_type=ClaimType.INTERPRETATION,
@@ -336,11 +368,12 @@ def build_seeded_runner(ctx: PipelineContext) -> WorkflowRunner:
                 "Sample conflict: schedule lists 6 piles; plan lists 8. "
                 "Confirm the authoritative count before any release."
             )
+        ctx.playbook = "pile_v1"
         ctx.chain.append(claim_type=ClaimType.EXTRACTION, subject="document",
                          value=ctx.document.name, produced_by="seeded_demo_data")
         run.context["elements"] = elements
         return {
-            "facts": 2, "elements": len(elements),
+            "facts": 2, "elements": len(elements), "playbook": ctx.playbook,
             "_metrics": {"pages_or_items_processed": 2, "values_extracted": 2,
                         "exceptions_raised": 0},
         }

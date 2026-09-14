@@ -51,7 +51,9 @@ def register(app, api):
             ])
             label = "Target from the repository walkthrough"
         else:
-            refs = sorted(ctx.document.parent.glob("Output*.pdf"))
+            # ``document`` may be the project folder or one sheet inside it
+            root = ctx.document if ctx.document.is_dir() else ctx.document.parent
+            refs = sorted(root.glob("Output*.pdf"))
             reference = api.parse_bar_list(refs[0], project_id=ctx.project_id) if refs else None
             label = "Project reference bar list"
         if reference:
@@ -88,7 +90,7 @@ def register(app, api):
         _, ctx = api._require(run_id)
         if ctx.project_id == SEED_PROJECT_ID:
             raise HTTPException(404, "Sample uses an illustrative schematic, not a source PDF")
-        with pymupdf.open(ctx.document) as doc:
+        with pymupdf.open(ctx.primary_document) as doc:
             if not 1 <= page <= len(doc):
                 raise HTTPException(404, "Page not found")
             p = doc[page - 1]
@@ -100,7 +102,7 @@ def register(app, api):
         _, ctx = api._require(run_id)
         if ctx.project_id == SEED_PROJECT_ID:
             return {"pages": 1, "sample": True}
-        with pymupdf.open(ctx.document) as doc:
+        with pymupdf.open(ctx.primary_document) as doc:
             return {"pages": len(doc), "sample": False}
 
     @app.post("/projects/upload")

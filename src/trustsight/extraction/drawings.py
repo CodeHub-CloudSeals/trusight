@@ -101,6 +101,15 @@ def read_pile_project(pdf_path: str | Path, project_id: str) -> ExtractionResult
     defaulted.
     """
     path = Path(pdf_path)
+    # The unit of work is the drawing set, not one file. A run may be pointed
+    # at the project folder, in which case the pile sheet is the first input.
+    if path.is_dir():
+        inputs = sorted(path.glob("Input*.pdf")) or sorted(path.glob("*.pdf"))
+        if not inputs:
+            result = ExtractionResult()
+            result.unresolved.append(f"no input drawings in {path.name}")
+            return result
+        path = inputs[0]
     result = ExtractionResult()
     doc = pymupdf.open(path)
 

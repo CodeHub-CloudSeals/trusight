@@ -23,6 +23,7 @@ from ..engine.spatial import build_scene, self_check
 from ..eval import harness
 from ..evidence.fabric import EvidenceChain
 from ..extraction.barlist import parse_bar_list
+from ..extraction import playbooks
 from ..extraction.pdf import extract
 from ..graph.knowledge_graph import ProjectKnowledgeGraph
 from ..knowledge.project import ProjectKnowledge, Scope
@@ -65,9 +66,15 @@ def _rulebook(project_id: str, scenario: str = "clarification") -> Rulebook:
     unapproved — a demo default is not an engineer's sign-off.
     """
     seeded_approved = project_id == SEED_PROJECT_ID and scenario != "approval"
+    slug = "atlantic" if project_id == SEED_PROJECT_ID else (
+        project_id.lower().split(" - ")[-1].split()[0] or "project")
     return Rulebook(
-        version="atlantic-1.0", project_id=project_id,
-        cover_mm={"pile": 75}, stock_length_mm=9000, rounding_mm=5,
+        version=f"{slug}-1.0", project_id=project_id,
+        # One entry per element family the playbooks can read. There is no
+        # generic fallback: an unlisted condition raises rather than borrowing
+        # another element's cover (invariant I2).
+        cover_mm={"pile": 75, "footing": 40},
+        stock_length_mm=9000, rounding_mm=5,
         spacing_convention="floor_plus_one",
         approved_by="demo-estimator (simulated)" if seeded_approved else None,
     )
@@ -126,6 +133,8 @@ def projects() -> list[dict[str, Any]]:
         "needs_vision": False,
         "route": "semi_structured",
         "seeded": True,
+        "playbook": "pile_v1",
+        "readable": True,
     }]
     for project_dir in sorted(p for p in CORPUS.glob("*") if p.is_dir()):
         inputs = sorted(project_dir.glob("Input*.pdf"))
@@ -134,6 +143,13 @@ def projects() -> list[dict[str, Any]]:
             doc = extract(f)
             tiers.append(doc.tier.value)
             needs_vision |= any(s.needs_vision for s in doc.sheets)
+        # Coverage is stated per project rather than implied. A project with
+        # no playbook is reported as such instead of appearing runnable and
+        # then returning an empty schedule.
+        try:
+            playbook = playbooks.select(project_dir).name
+        except playbooks.NoPlaybook:
+            playbook = None
         out.append({
             "project_id": project_dir.name,
             "inputs": [f.name for f in inputs],
@@ -141,6 +157,8 @@ def projects() -> list[dict[str, Any]]:
             "tiers": sorted(set(tiers)),
             "needs_vision": needs_vision,
             "route": "unstructured" if needs_vision else "semi_structured",
+            "playbook": playbook,
+            "readable": playbook is not None,
         })
     return out
 
@@ -176,7 +194,10 @@ def start_run(body: StartRun, background: BackgroundTasks) -> dict[str, Any]:
         drawings = sorted(project_dir.glob("Input*.pdf"))
         if not drawings:
             raise HTTPException(404, f"no input drawings for {body.project_id}")
-        document = drawings[0]
+        # Hand the playbook the whole set: an element's instance count can
+        # depend on how many documents in the set describe it, which reading
+        # only the first sheet would silently undercount.
+        document = project_dir
 
     ctx = PipelineContext(
         project_id=body.project_id,
