@@ -109,6 +109,25 @@ class RebarCalculator:
                 "no leg dimensions; cutting length cannot be derived without "
                 "geometry or an approved shape"
             )
+        if r.bend_type is None:
+            # An unstated bend type is not a straight bar.
+            #
+            # The catalogue keys straight bars on "" because that is how the
+            # bar lists encode them, and ``resolve`` maps a missing bend type
+            # to the same entry. That is right when checking a supplied bar
+            # list and wrong when generating one: it silently took column B
+            # alone as the cutting length. A pile bar of A 510 + B 11,955
+            # came out as 11,955 mm — the hook quietly dropped — and a spiral
+            # of five legs came out as 140 mm. Both were then *released*,
+            # which is the one outcome this product exists to prevent.
+            #
+            # Which columns are legs is a property of the shape, so with no
+            # shape there is no sum to make. Ask.
+            raise ShapeResolutionError(
+                "the bend type is not stated, and the shape is what decides "
+                "which legs enter the cutting length; it cannot be inferred "
+                "from the leg dimensions alone"
+            )
         shape = resolve(r.bend_type, r.legs)
         missing = shape.missing_legs(r.legs)
         if missing:

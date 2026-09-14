@@ -1,5 +1,9 @@
 """Minimal three.js viewer for the derived spatial view.
 
+three.js is served from this application rather than a public CDN: a client
+network that blocks external script hosts would otherwise show an empty
+viewer, and a demo is exactly where that happens.
+
 Labelled "Spatial Interpretation / Completeness View", never a BIM model.
 Every placement is instantiated, so six piles appear as six cylinders
 rather than one element node. Unresolved reinforcement is not drawn.
@@ -38,14 +42,17 @@ VIEWER_HTML = """<!doctype html>
 </div>
 <div id="sel"></div>
 <script type="importmap">
-{"imports":{"three":"https://cdnjs.cloudflare.com/ajax/libs/three/0.160.0/three.module.js"}}
+{"imports":{"three":"/assets/vendor/three.module.js"}}
 </script>
 <script type="module">
 import * as THREE from 'three';
 
 if (window.self === window.top) document.getElementById('back').style.display = 'block';
 
-const runId = new URLSearchParams(location.search).get('run');
+/* The run is in the path. Reading it from a query string meant the viewer
+   opened blank whenever the URL was copied, shared or bookmarked without
+   the string — exactly what happens when someone sends a colleague a link. */
+const runId = __RUN_ID__ || new URLSearchParams(location.search).get('run');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0E1E38);
 const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 1, 200000);

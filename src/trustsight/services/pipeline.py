@@ -20,7 +20,7 @@ from ..engine import controls
 from ..engine.calculator import RebarCalculator
 from ..engine.rulebook import Rulebook
 from ..engine.spatial import build_scene
-from ..evidence.fabric import ClaimType, EvidenceChain
+from ..evidence.fabric import ClaimType, EvidenceChain, claim_subject
 from ..extraction import playbooks
 from ..extraction.drawings import read_pile_project
 from ..graph.knowledge_graph import ProjectKnowledgeGraph
@@ -40,6 +40,7 @@ from ..models.core import (
     SheetRef,
     SourceTier,
 )
+from ..workflow import routes
 from ..workflow.runner import Run, WorkflowRunner
 
 #: Fixed id for the seeded walkthrough (spec s16/s20 "resettable seeded demo
@@ -66,6 +67,36 @@ class PipelineContext:
     demo_scenario: str = "clarification"
     #: which playbook read this document set; None until extraction runs
     playbook: str | None = None
+    #: requested input quality: structured | semi_structured | unstructured
+    path_mode: str = "semi_structured"
+    #: the route actually taken, set when the runner is built
+    route: str | None = None
+    #: The estimator's current time for this scope, in minutes, supplied at
+    #: run start. None means no baseline was given — and then no time saving
+    #: is reported at all rather than one computed against a guess.
+    manual_baseline_minutes: int | None = None
+    #: Measured review time: wall clock between a question being raised and
+    #: its answer arriving. Accumulated by the API, never estimated.
+    human_seconds: float = 0.0
+    #: monotonic timestamp of the moment the run last stopped on a human
+    awaiting_since: float | None = None
+    #: how many iterations this run has been through (spec s14.2). Approvals
+    #: keep the same run id and increment this, so a client can see that the
+    #: second pass is the same job continuing, not a fresh run.
+    iteration: int = 1
+
+    def start_waiting(self) -> None:
+        """Mark the moment the run handed work back to a person."""
+        import time
+        if self.questions and self.awaiting_since is None:
+            self.awaiting_since = time.monotonic()
+
+    def stop_waiting(self) -> None:
+        """Bank the review time that just elapsed."""
+        import time
+        if self.awaiting_since is not None:
+            self.human_seconds += time.monotonic() - self.awaiting_since
+            self.awaiting_since = None
 
     @property
     def primary_document(self) -> Path:
@@ -141,6 +172,29 @@ def _questions_for(ctx: PipelineContext) -> list[dict[str, Any]]:
                     ),
                     "blocking": True,
                 })
+            if r.legs and r.bend_type is None:
+                # Legs alone do not give a cutting length: the shape decides
+                # which columns are summed and which are geometry only (a T3
+                # spiral carries a value in O that is excluded). Without this
+                # question an answered "legs" looked complete while the
+                # calculation had no shape to apply, and the run released a
+                # number built from the wrong columns.
+                out.append({
+                    "claim_id": r.claim_id,
+                    "element": element.identity.key(),
+                    "role": r.role.value,
+                    "field": "bend_type",
+                    "question": (
+                        f"Bar shape for {element.mark} {r.role.value} "
+                        f"{r.bar_size.value}: leg dimensions "
+                        f"{'+'.join(sorted(r.legs))} are approved but the bend "
+                        f"type is not stated on any sheet. The shape decides "
+                        f"which legs are summed, so please confirm it (for "
+                        f"example 2 for a single end hook, 17 for a U-bar, "
+                        f"T3 for a spiral)."
+                    ),
+                    "blocking": True,
+                })
             if not r.legs:
                 out.append({
                     "claim_id": r.claim_id,
@@ -158,15 +212,130 @@ def _questions_for(ctx: PipelineContext) -> list[dict[str, Any]]:
     return out
 
 
-def build_runner(ctx: PipelineContext, *, strict: bool = False) -> WorkflowRunner:
-    """Register handlers for the steps this demo implements."""
-    runner = WorkflowRunner(strict=strict)
+def build_runner(ctx: PipelineContext, *, strict: bool = True,
+                 route: routes.Route | None = None) -> WorkflowRunner:
+    """Register handlers for the steps this demo implements.
+
+    The route decides which steps are required. Strict is the default: a
+    step this route depends on that has no handler fails the run rather than
+    letting it report success with interpretation skipped.
+    """
+    route = route or routes.get(ctx.path_mode)
+    ctx.route = route.name
+    runner = WorkflowRunner(strict=strict, required=route.requires())
 
     @runner.handler("receive_drawings")
     def _receive(run: Run) -> dict[str, Any]:
         ctx.chain.append(claim_type=ClaimType.EXTRACTION,
                          subject="document", value=ctx.document.name)
         return {"document": ctx.document.name, "_metrics": {"pages_or_items_processed": 1}}
+
+    @runner.handler("preflight")
+    def _preflight(run: Run) -> dict[str, Any]:
+        """What kind of document is this, before anything tries to read it.
+
+        The source tier is a governance input, not a diagnostic: a value
+        read from a native text layer and one inferred from a scan do not
+        deserve the same confidence, and the gate vector carries that
+        difference all the way to the release decision.
+        """
+        from ..extraction.pdf import extract as probe
+        paths = ([ctx.document] if not ctx.document.is_dir()
+                 else sorted(ctx.document.glob("Input*.pdf"))
+                 or sorted(ctx.document.glob("*.pdf")))
+        tiers, needs_vision, pages = [], False, 0
+        for path in paths[:8]:
+            try:
+                doc = probe(path)
+            except Exception:      # a file we cannot open is a finding
+                ctx.unresolved.append(f"{path.name}: could not be opened")
+                continue
+            tiers.append(doc.tier.value)
+            pages += len(doc.sheets)
+            needs_vision |= any(sheet.needs_vision for sheet in doc.sheets)
+        run.context["source_tiers"] = sorted(set(tiers))
+        run.context["needs_vision"] = needs_vision
+        return {"documents": len(paths), "pages": pages,
+                "tiers": sorted(set(tiers)), "needs_vision": needs_vision,
+                "_metrics": {"pages_or_items_processed": pages}}
+
+    @runner.handler("playbook_retrieval")
+    def _playbook(run: Run) -> dict[str, Any]:
+        """Keyed lookup, never generation (spec s5).
+
+        Selection is its own step because choosing the wrong reader is a
+        different failure from reading badly, and only one of the two is
+        visible in the output.
+        """
+        if ctx.project_id == SEED_PROJECT_ID:
+            ctx.playbook = "pile_v1"
+            return {"playbook": ctx.playbook, "basis": "seeded walkthrough"}
+        try:
+            chosen = playbooks.select(ctx.document)
+        except playbooks.NoPlaybook as exc:
+            ctx.unresolved.append(str(exc))
+            return {"playbook": None, "basis": "no playbook recognises this set"}
+        ctx.playbook = chosen.name
+        ctx.chain.append(claim_type=ClaimType.RULE_APPLICATION,
+                         subject=f"playbook/{chosen.name}",
+                         value={"element_family": chosen.element_family,
+                                "description": chosen.description})
+        return {"playbook": chosen.name, "element_family": chosen.element_family,
+                "basis": "anchors present in the drawing set"}
+
+    @runner.handler("cross_sheet_resolution")
+    def _cross_sheet(run: Run) -> dict[str, Any]:
+        """Which sheets contributed to which element.
+
+        The client's question is "why do you believe these facts describe one
+        element". The answer is the sheet set behind it, recorded rather than
+        asserted.
+        """
+        by_element: dict[str, list[str]] = {}
+        for element in ctx.graph.elements.values():
+            sheets = sorted({s.sheet_no or s.document_id
+                             for s in element.sheets if s})
+            by_element[element.identity.key()] = sheets
+            if len(sheets) > 1:
+                ctx.chain.append(
+                    claim_type=ClaimType.INTERPRETATION,
+                    subject=element.identity.key(),
+                    value={"resolved_across_sheets": sheets},
+                    produced_by="deterministic cross-sheet merge")
+        run.context["sheets_per_element"] = by_element
+        multi = sum(1 for v in by_element.values() if len(v) > 1)
+        return {"elements": len(by_element), "multi_sheet_elements": multi}
+
+    @runner.handler("clarification")
+    def _clarify(run: Run) -> dict[str, Any]:
+        """Turn each blocker into one precise question.
+
+        This step writes the question and never the answer. A question that
+        proposes its own answer is an assumption with a question mark on it.
+        """
+        ctx.questions = _questions_for(ctx)
+        for q in ctx.questions:
+            ctx.chain.append(claim_type=ClaimType.INTERPRETATION,
+                             subject=q["element"],
+                             value={"question": q["field"], "blocking": True})
+        return {"questions": len(ctx.questions),
+                "_metrics": {"exceptions_raised": len(ctx.questions)}}
+
+    @runner.handler("approved_knowledge")
+    def _approved(run: Run) -> dict[str, Any]:
+        """Approved facts reused on this pass, with their scope.
+
+        Reuse is only legitimate while the scope predicate matches. One
+        project's assumption becoming a global rule is a governance action,
+        not a side effect of a second run.
+        """
+        facts = ctx.knowledge.all() if hasattr(ctx.knowledge, "all") else []
+        applied = [{"field": f.field, "scope": f.scope.describe(),
+                    "approver": f.approver, "version": f.version}
+                   for f in facts]
+        run.context["approved_knowledge"] = applied
+        return {"approved_facts": len(applied),
+                "_metrics": {"reused_knowledge_count": len(applied)}}
 
     @runner.handler("extraction")
     def _extract(run: Run) -> dict[str, Any]:
@@ -226,18 +395,46 @@ def build_runner(ctx: PipelineContext, *, strict: bool = False) -> WorkflowRunne
                        "reinforcement": len(element.reinforcement)},
                 source=element.sheets[0] if element.sheets else None,
             )
+            # and once per claim, so each reinforcement item owns a complete
+            # chain rather than borrowing the element's
+            for r in element.reinforcement:
+                for kind in (ClaimType.EXTRACTION, ClaimType.INTERPRETATION):
+                    ctx.chain.append(
+                        claim_type=kind,
+                        subject=claim_subject(element.identity.key(), r.claim_id),
+                        value={"role": r.role.value, "bar_size": r.bar_size.value,
+                               "count": r.count, "spacing_mm": r.spacing_mm},
+                        source=(r.source[0] if r.source
+                                else element.sheets[0] if element.sheets else None),
+                        produced_by=f"extraction.{ctx.playbook}",
+                    )
         ctx.graph.find_spatial_duplicates()
         return {**ctx.graph.stats(), "_metrics": {"reused_knowledge_count": reused}}
 
     @runner.handler("missing_conflict_check")
     def _missing(run: Run) -> dict[str, Any]:
+        """Pure function over the graph: what is missing, what conflicts.
+
+        Kept separate from clarification: finding a gap and wording a
+        question about it are different jobs, and only the first must be
+        deterministic.
+        """
         ctx.questions = _questions_for(ctx)
-        return {"open_questions": len(ctx.questions),
-                "_metrics": {"exceptions_raised": len(ctx.questions)}}
+        conflicts = [c for e in ctx.graph.elements.values() for c in e.conflicts]
+        return {"open_questions": len(ctx.questions), "conflicts": len(conflicts),
+                "_metrics": {"exceptions_raised": len(ctx.questions) + len(conflicts)}}
 
     @runner.handler("rulebook")
     def _rulebook(run: Run) -> dict[str, Any]:
-        for key in ctx.graph.elements:
+        for key, element in ctx.graph.elements.items():
+            for r in element.reinforcement:
+                ctx.chain.append(
+                    claim_type=ClaimType.RULE_APPLICATION,
+                    subject=claim_subject(key, r.claim_id),
+                    value=ctx.rulebook.version,
+                    rulebook_ver=ctx.rulebook.version,
+                    rulebook_approved=ctx.rulebook.is_approved(),
+                )
             ctx.chain.append(
                 claim_type=ClaimType.RULE_APPLICATION,
                 subject=key,
@@ -255,7 +452,7 @@ def build_runner(ctx: PipelineContext, *, strict: bool = False) -> WorkflowRunne
         for item in ctx.schedule.items:
             ctx.chain.append(
                 claim_type=ClaimType.CALCULATION,
-                subject=item.element_key or "",
+                subject=claim_subject(item.element_key or "", item.claim_id),
                 value={"quantity": item.quantity,
                        "cutting_length_mm": item.cutting_length_mm},
                 gates=item.gates,
@@ -356,8 +553,8 @@ def _seeded_pile_elements(project_id: str, scenario: str = "clarification") -> l
 
 
 def build_seeded_runner(ctx: PipelineContext) -> WorkflowRunner:
-    """Same 23-step registration as :func:`build_runner`, extraction swapped
-    for the synthetic Atlantic drawing so the demo needs no PDF corpus."""
+    """Same registration as :func:`build_runner`, extraction swapped for the
+    synthetic Atlantic drawing so the demo needs no PDF corpus."""
     runner = build_runner(ctx)
 
     @runner.handler("extraction")
@@ -383,8 +580,28 @@ def build_seeded_runner(ctx: PipelineContext) -> WorkflowRunner:
 
 def answer(ctx: PipelineContext, *, field_name: str, value: Any, scope: Scope,
            approver: str, rationale: str) -> None:
-    """Record a human answer as approved project knowledge."""
+    """Record a human answer as approved project knowledge.
+
+    The approval is written against the scope *and* against every claim that
+    scope currently matches. Without the second write the release decision
+    for a claim never sees the approval that unblocked it, because the two
+    are keyed differently.
+    """
     fact = ctx.knowledge.approve(field_name, value, scope, approver, rationale)
+    for element in ctx.graph.elements.values():
+        for r in element.reinforcement:
+            if not scope.matches(project_id=ctx.project_id,
+                                 element_type=element.element_type.value,
+                                 mark=element.mark, role=r.role.value):
+                continue
+            ctx.chain.append(
+                claim_type=ClaimType.APPROVAL,
+                subject=claim_subject(element.identity.key(), r.claim_id),
+                value={"field": field_name, "value": value,
+                       "version": fact.version},
+                approver=approver,
+                rationale=rationale,
+            )
     ctx.chain.append(
         claim_type=ClaimType.APPROVAL,
         subject=scope.describe(),
@@ -403,4 +620,11 @@ def rerun(ctx: PipelineContext, project_id: str) -> Run:
     ctx.questions.clear()
     ctx.unresolved.clear()
     runner = build_seeded_runner(ctx) if project_id == SEED_PROJECT_ID else build_runner(ctx)
-    return runner.execute(run)
+    run.route = ctx.route
+    ctx.iteration += 1
+    run.iteration = ctx.iteration
+    executed = runner.execute(run)
+    # A rerun that still has questions is waiting on a person again; the
+    # clock for the next answer starts here rather than at the API call.
+    ctx.start_waiting()
+    return executed

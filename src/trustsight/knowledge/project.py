@@ -74,6 +74,10 @@ class ProjectKnowledge:
         self._facts.append(fact)
         return fact
 
+    def all(self) -> list[ApprovedFact]:
+        """Every approved fact, newest last. Read-only view for reporting."""
+        return list(self._facts)
+
     def lookup(self, field: str, *, element_type: str, mark: str | None = None,
                role: str | None = None) -> ApprovedFact | None:
         matches = [

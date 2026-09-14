@@ -10,9 +10,12 @@ __pycache__/
 cdk.out/
 infra/
 tests/
-corpus/
 .env
 .DS_Store
 Claude outputs/
 *.png
 *.jpg
+
+# data/ is NOT excluded: the image copies it so a hosted demo can serve a
+# corpus. With no corpus present the directory holds only a README and the
+# app falls back to the seeded walkthrough, which /ready reports.

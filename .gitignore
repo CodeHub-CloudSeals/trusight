@@ -6,3 +6,15 @@ cdk.out/
 *.egg-info/
 .env
 Claude outputs/
+
+# Client drawings never enter the repository. The folder is kept so the
+# Dockerfile can copy it; its contents are not ours to publish.
+data/corpus/*
+!data/corpus/.keep
+
+# Recorded fallback runs (scripts/freeze_run.py) hold rendered pages of the
+# client's drawings and the client's own quantities. Same rule as the corpus:
+# generated per host, never committed. The folder is kept so the image build
+# has somewhere to copy from when an operator has deliberately frozen one.
+data/fallback/*
+!data/fallback/.keep

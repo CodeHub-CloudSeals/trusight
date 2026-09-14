@@ -8,6 +8,9 @@ and cloud behaviour cannot drift.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
+import json
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -21,11 +24,13 @@ from pydantic import BaseModel
 from ..engine.rulebook import Rulebook
 from ..engine.spatial import build_scene, self_check
 from ..eval import harness
-from ..evidence.fabric import EvidenceChain
+from ..evidence.fabric import EvidenceChain, claim_subject
 from ..extraction.barlist import parse_bar_list
+from .. import exports
 from ..extraction import playbooks
 from ..extraction.pdf import extract
 from ..graph.knowledge_graph import ProjectKnowledgeGraph
+from ..shapes import catalogue as shapes
 from ..knowledge.project import ProjectKnowledge, Scope
 from ..services.pipeline import (
     SEED_PROJECT_ID,
@@ -35,12 +40,37 @@ from ..services.pipeline import (
     build_seeded_runner,
     rerun,
 )
+from ..services import roi as roi_service
+from ..workflow import routes
 from ..workflow.runner import Run, RunState
 from ..workflow.steps import STEPS, summary
 from .dashboard import DASHBOARD_HTML
+from . import fallback
 from .viewer import VIEWER_HTML
 
-app = FastAPI(title="TrustSight", version="0.2.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Pay the corpus scan at boot, not when the presenter opens the picker.
+
+    Tier detection opens every input PDF, which took five seconds across the
+    reference corpus — five seconds of empty panel every time someone clicked
+    "New run". Best effort in a background thread: a corpus that cannot be
+    read must not stop the service from starting, because the seeded
+    walkthrough does not need one and /ready reports the state honestly.
+    """
+    import threading
+
+    def warm() -> None:
+        try:
+            projects()
+        except Exception:  # noqa: BLE001 - /ready is the place that reports
+            pass
+
+    threading.Thread(target=warm, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="TrustSight", version="0.2.0", lifespan=lifespan)
 ASSETS = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=ASSETS), name="assets")
 
@@ -84,6 +114,16 @@ class StartRun(BaseModel):
     project_id: str
     path_mode: str = "semi_structured"  # structured | semi_structured | unstructured
     scenario: Literal["clarification", "conflict", "structured", "approval"] = "clarification"
+    #: The estimator's current time for this scope. Optional, and left
+    #: optional on purpose: with no baseline the ROI view reports machine and
+    #: review time and states that no saving is claimed, rather than
+    #: measuring against a number nobody supplied (spec s12).
+    manual_baseline_minutes: int | None = None
+    #: Advisory (spec s14.1). Every output is generated on demand from the
+    #: same run data, so this records what the client asked for rather than
+    #: gating anything — an "available" list that silently differs from what
+    #: /runs/{id}/exports serves would be worse than no list.
+    requested_outputs: list[str] = []
 
 
 class ClarificationIn(BaseModel):
@@ -104,6 +144,12 @@ class ApprovalIn(BaseModel):
 
 
 def _require(run_id: str) -> tuple[Run, PipelineContext]:
+    if fallback.is_recorded(run_id):
+        # A recorded run has no live context to mutate. Saying so is better
+        # than returning an empty one and letting a write appear to succeed.
+        raise HTTPException(
+            409, "this is a recorded run and is read-only; start a live run "
+                 "to answer clarifications")
     if run_id not in _runs or run_id not in _ctx:
         raise HTTPException(404, "unknown run")
     return _runs[run_id], _ctx[run_id]
@@ -115,11 +161,102 @@ def health() -> dict[str, Any]:
             "steps": summary()}
 
 
+@app.get("/ready")
+def ready() -> dict[str, Any]:
+    """Go/no-go check, meant to be read in the ten minutes before a demo.
+
+    ``/health`` says the process is up. This says whether it can actually
+    do the thing: which corpus it can see, which playbook reads each
+    project, and whether any incomplete cloud handler is reachable. It
+    reports what is true rather than a green light — a readiness endpoint
+    that always says ready is worth nothing.
+    """
+    projects: list[dict[str, Any]] = [{
+        "project_id": SEED_PROJECT_ID, "seeded": True,
+        "playbook": "pile_v1", "readable": True,
+        "has_reference": True,
+    }]
+    corpus_present = CORPUS.exists()
+    if corpus_present:
+        for d in sorted(p for p in CORPUS.glob("*") if p.is_dir()):
+            try:
+                name = playbooks.select(d).name
+            except playbooks.NoPlaybook:
+                name = None
+            projects.append({
+                "project_id": d.name, "seeded": False, "playbook": name,
+                "readable": name is not None,
+                "has_reference": bool(list(d.glob("Output*.pdf"))),
+            })
+    readable = [p for p in projects if p["readable"]]
+    assets = Path(__file__).parent / "static"
+    checks = {
+        "execution_mode": "cloud" if CLOUD_MODE else "local_in_process",
+        # Cloud mode routes runs to Step Functions, and several Lambda
+        # handlers still raise NotImplementedError. Local mode is the only
+        # complete path today, so a hosted demo must report it.
+        "incomplete_cloud_handlers_reachable": bool(CLOUD_MODE),
+        "corpus_path": str(CORPUS),
+        "corpus_present": corpus_present,
+        "projects_visible": len(projects),
+        "projects_readable": len(readable),
+        "playbooks": [p.name for p in playbooks.PLAYBOOKS],
+        "routes": {r.name: {"available": r.available,
+                            "steps": len(r.steps),
+                            "reason": r.unavailable_reason or None}
+                   for r in routes.ROUTES.values()},
+        "viewer_three_js_vendored": (assets / "vendor" / "three.module.js").exists(),
+        "static_assets_present": (assets / "workspace.js").exists(),
+        "exports": ["bbs.csv", "bbs.xlsx", "bbs.pdf",
+                    "exceptions.csv", "exceptions.pdf", "evidence.json"],
+        "xlsx_writer_available": exports.xlsx_available(),
+        "active_runs": len(_runs),
+        # If the live path fails mid-session there has to be something to
+        # switch to. Zero here is not a blocker — it is a stated risk.
+        "recorded_runs": [r["run_id"] for r in fallback.available()],
+        "fallback_path": str(fallback.STORE),
+    }
+    blocking = []
+    if CLOUD_MODE:
+        blocking.append(
+            "cloud mode is on: runs would be routed to Step Functions and "
+            "several handlers raise NotImplementedError")
+    if not checks["static_assets_present"]:
+        blocking.append("workspace assets missing from the image")
+    if not checks["viewer_three_js_vendored"]:
+        blocking.append(
+            "three.js is not vendored: the 3D viewer would need a public CDN")
+    if not checks["xlsx_writer_available"]:
+        blocking.append(
+            "openpyxl is missing: the XLSX export would be unavailable "
+            "(run pip install -r requirements.txt)")
+    if not corpus_present:
+        blocking.append(
+            f"no corpus at {CORPUS}: only the seeded walkthrough can run")
+
+    warnings = []
+    if not checks["recorded_runs"]:
+        warnings.append(
+            "no recorded fallback run: if live extraction fails during the "
+            "session there is nothing to switch to "
+            "(python scripts/freeze_run.py)")
+    return {"ready": not blocking, "blocking": blocking, "warnings": warnings,
+            "checks": checks, "projects": projects}
+
+
 @app.get("/pipeline")
 def pipeline() -> list[dict[str, Any]]:
     """Screen 2: make the orchestration visible."""
     return [{"no": s.no, "name": s.name, "kind": s.kind.value,
              "suspends": s.suspends, "note": s.note} for s in STEPS]
+
+
+#: Tier detection opens and parses every input PDF, which took five seconds
+#: across the reference corpus. The project picker calls this every time it
+#: opens, so on stage the presenter clicked "New run" and watched an empty
+#: panel. The drawings do not change while the server is up; keyed on path
+#: and mtime, so a file replaced underneath us is still re-read.
+_project_cache: dict[tuple[str, int], dict[str, Any]] = {}
 
 
 @app.get("/projects")
@@ -138,6 +275,12 @@ def projects() -> list[dict[str, Any]]:
     }]
     for project_dir in sorted(p for p in CORPUS.glob("*") if p.is_dir()):
         inputs = sorted(project_dir.glob("Input*.pdf"))
+        key = (str(project_dir),
+               max((int(f.stat().st_mtime) for f in inputs), default=0))
+        cached = _project_cache.get(key)
+        if cached is not None:
+            out.append(cached)
+            continue
         tiers, needs_vision = [], False
         for f in inputs:
             doc = extract(f)
@@ -150,7 +293,7 @@ def projects() -> list[dict[str, Any]]:
             playbook = playbooks.select(project_dir).name
         except playbooks.NoPlaybook:
             playbook = None
-        out.append({
+        entry = {
             "project_id": project_dir.name,
             "inputs": [f.name for f in inputs],
             "has_ground_truth": bool(list(project_dir.glob("Output*.pdf"))),
@@ -159,7 +302,9 @@ def projects() -> list[dict[str, Any]]:
             "route": "unstructured" if needs_vision else "semi_structured",
             "playbook": playbook,
             "readable": playbook is not None,
-        })
+        }
+        _project_cache[key] = entry
+        out.append(entry)
     return out
 
 
@@ -199,19 +344,33 @@ def start_run(body: StartRun, background: BackgroundTasks) -> dict[str, Any]:
         # only the first sheet would silently undercount.
         document = project_dir
 
+    route = routes.get(body.path_mode)
+    if not route.available:
+        # Refusing is the honest answer. Starting a run that fails halfway
+        # through would look like a bug rather than a stated boundary.
+        raise HTTPException(400, {
+            "error": f"route {route.name!r} is not available in this build",
+            "reason": route.unavailable_reason,
+            "available_routes": [r.name for r in routes.ROUTES.values()
+                                 if r.available],
+        })
+
     ctx = PipelineContext(
         project_id=body.project_id,
         document=document,
+        path_mode=route.name,
         rulebook=_rulebook(body.project_id, body.scenario),
         graph=ProjectKnowledgeGraph(body.project_id),
         chain=EvidenceChain(run_id="pending"),
         knowledge=ProjectKnowledge(body.project_id),
         demo_scenario=body.scenario,
+        manual_baseline_minutes=body.manual_baseline_minutes,
     )
     run = Run(project_id=body.project_id)
     run.versions = {"rulebook": ctx.rulebook.version,
-                    "path_mode": body.path_mode,
+                    "path_mode": route.name,
                     "model": os.getenv("TRUSTSIGHT_MODEL", "unset")}
+    run.route = route.name
     ctx.chain.run_id = run.run_id
     _runs[run.run_id] = run
     _ctx[run.run_id] = ctx
@@ -227,20 +386,41 @@ def start_run(body: StartRun, background: BackgroundTasks) -> dict[str, Any]:
         run.context["execution_arn"] = execution["executionArn"]
     else:
         runner = build_seeded_runner(ctx) if seeded else build_runner(ctx)
-        background.add_task(lambda: runner.execute(run))
 
-    return {"run_id": run.run_id, "state": run.state.value,
-            "versions": run.versions, "mode": "cloud" if CLOUD_MODE else "local"}
+        def _execute() -> None:
+            runner.execute(run)
+            # If the run ended holding a question, review time starts now —
+            # not when the browser happens to poll.
+            ctx.start_waiting()
+
+        background.add_task(_execute)
+
+    return {"run_id": run.run_id, "state": run.state.value, "iteration": run.iteration,
+            "route": route.name, "versions": run.versions,
+            "requested_outputs": body.requested_outputs,
+            "manual_baseline_minutes": body.manual_baseline_minutes,
+            "execution_mode": "cloud" if CLOUD_MODE else "local-demo",
+            "mode": "cloud" if CLOUD_MODE else "local"}
 
 
 @app.get("/runs/{run_id}")
 def get_run(run_id: str) -> dict[str, Any]:
+    if fallback.is_recorded(run_id):
+        try:
+            return fallback.summary(run_id)
+        except KeyError as exc:
+            raise HTTPException(404, "unknown recorded run") from exc
     run, ctx = _require(run_id)
     return {"run_id": run.run_id, "project_id": run.project_id,
-            "state": run.state.value, "completed_steps": run.completed_steps(),
+            "state": run.state.value, "iteration": run.iteration,
+            "route": run.route,
+            "completed_steps": run.completed_steps(),
             "pending_step": run.pending_step, "pending_token": run.pending_token,
             "versions": run.versions,
-            "open_questions": len(ctx.questions), "roi": run.roi()}
+            "open_questions": len(ctx.questions),
+            "claim_summary": roi_service.claim_summary(ctx),
+            "recorded": False,
+            "roi": run.roi()}
 
 
 @app.get("/runs/{run_id}/graph")
@@ -268,6 +448,9 @@ def exceptions(run_id: str) -> dict[str, Any]:
 def clarify(run_id: str, body: ClarificationIn) -> dict[str, Any]:
     """Record a human answer as approved project knowledge, then re-run."""
     _, ctx = _require(run_id)
+    # The review clock stops the moment the answer arrives, before any
+    # recalculation, so machine time is never billed as human time.
+    ctx.stop_waiting()
     if not body.approver.strip() or not body.rationale.strip():
         raise HTTPException(422, "Approver and rationale are required")
     if body.field_name not in {"legs", "run_length_mm", "cover_mm", "bend_type", "shape_code"}:
@@ -280,6 +463,20 @@ def clarify(run_id: str, body: ClarificationIn) -> dict[str, Any]:
     elif body.field_name.endswith("_mm"):
         if type(body.value) is not int or not 0 < body.value <= 100000:
             raise HTTPException(422, "Enter a positive integer dimension up to 100,000 mm")
+    elif body.field_name == "bend_type":
+        # Now that the shape is something a person types during the demo, it
+        # has to be checked here. An unchecked value reached the catalogue,
+        # which raised AttributeError on a number and failed the whole run —
+        # a typo on stage ending the walkthrough. Rejecting with the list of
+        # shapes the catalogue actually holds is both safer and more useful
+        # than a run that dies.
+        known = sorted(k for k in shapes.CATALOGUE if k)
+        if not isinstance(body.value, str) or body.value.strip() not in known:
+            raise HTTPException(422, (
+                f"Unknown bend type. This build's catalogue holds "
+                f"{', '.join(known)}. Seed the catalogue from the ACI "
+                f"reference to add more (spec D6)."))
+        body.value = body.value.strip()
     answer(ctx, field_name=body.field_name, value=body.value,
            scope=Scope(project_id=ctx.project_id, element_type=body.element_type,
                        mark=body.mark, role=body.role),
@@ -287,7 +484,9 @@ def clarify(run_id: str, body: ClarificationIn) -> dict[str, Any]:
     run = rerun(ctx, ctx.project_id)
     _runs[run_id] = run
     return {"run_id": run_id, "state": run.state.value,
+            "iteration": run.iteration,
             "open_questions": len(ctx.questions),
+            "claim_summary": roi_service.claim_summary(ctx),
             "knowledge_facts": len(ctx.knowledge.facts)}
 
 
@@ -302,6 +501,7 @@ def approve(run_id: str, body: ApprovalIn) -> dict[str, Any]:
     but does not touch the rulebook.
     """
     run, ctx = _require(run_id)
+    ctx.stop_waiting()
     ctx.chain.append(claim_type="approval",
                      subject=body.answer.get("subject", "unspecified"),
                      value=body.answer, approver=body.approver,
@@ -327,13 +527,21 @@ def approve(run_id: str, body: ApprovalIn) -> dict[str, Any]:
         # Release is decided per calculation *subject* (element/claim key),
         # so the sign-off has to land on the same subjects the calculation
         # used, not a generic "rulebook" label, or release_status never sees it.
-        keys = {i.element_key for i in (ctx.schedule.items if ctx.schedule else []) if i.element_key}
-        for key in keys:
+        subjects: set[str] = set()
+        for item in (ctx.schedule.items if ctx.schedule else []):
+            if not item.element_key:
+                continue
+            subjects.add(item.element_key)
+            subjects.add(claim_subject(item.element_key, item.claim_id))
+        for key in subjects:
             ctx.chain.append(claim_type="approval", subject=key,
                              value={"rulebook": ctx.rulebook.version, "decision": "approved"},
                              approver=body.approver, rationale=body.rationale)
     _runs[run_id] = run
-    return {"run_id": run_id, "state": run.state.value}
+    ctx.start_waiting()
+    return {"run_id": run_id, "state": run.state.value,
+            "iteration": run.iteration,
+            "claim_summary": roi_service.claim_summary(ctx)}
 
 
 @app.get("/runs/{run_id}/schedule")
@@ -345,7 +553,8 @@ def schedule(run_id: str) -> dict[str, Any]:
     items = []
     for i in ctx.schedule.items:
         decision = ctx.chain.release_status(
-            i.element_key or "", rulebook_approved=ctx.rulebook.is_approved())
+            claim_subject(i.element_key or "", i.claim_id),
+            rulebook_approved=ctx.rulebook.is_approved())
         items.append({**i.model_dump(mode="json"),
                       "total_mass_kg": round(i.total_mass_kg, 1),
                       "release": decision.state.value,
@@ -364,25 +573,100 @@ def controls_view(run_id: str) -> list[dict[str, Any]]:
 
 @app.get("/runs/{run_id}/roi")
 def roi(run_id: str) -> dict[str, Any]:
-    run, _ = _require(run_id)
-    return run.roi()
+    """Measured value (spec s12).
+
+    Built from the same workspace payload the screens read, so the ROI page
+    and the schedule page can never quote different numbers for the same
+    run.
+    """
+    if fallback.is_recorded(run_id):
+        return fallback.workspace(run_id).get("roi", {})
+    run, ctx = _require(run_id)
+    # bound by demo.register at import; resolved here at call time
+    payload = workspace_payload(run_id)  # noqa: F821
+    return roi_service.report(
+        run, ctx, benchmark=payload.get("benchmark"),
+        generated_mass_kg=payload.get("released_mass_kg", 0.0)
+        + payload.get("review_mass_kg", 0.0))
+
+
+@app.post("/runs/{run_id}/baseline")
+def set_baseline(run_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Record the estimator's manual baseline for this scope.
+
+    Separate from run start because in practice the number arrives in
+    conversation — "this one takes me about forty minutes" — after the run
+    is already going.
+    """
+    _, ctx = _require(run_id)
+    value = body.get("manual_baseline_minutes")
+    if value is not None and (type(value) is not int or not 0 < value <= 10000):
+        raise HTTPException(422, "Enter the baseline as whole minutes, 1-10000")
+    ctx.manual_baseline_minutes = value
+    return {"run_id": run_id, "manual_baseline_minutes": value}
+
+
+@app.get("/fallback")
+def recorded_runs() -> list[dict[str, Any]]:
+    """Recorded runs this instance can serve if the live path is unavailable."""
+    return fallback.available()
 
 
 @app.get("/runs/{run_id}/scene")
 def scene(run_id: str) -> dict[str, Any]:
+    """Derived spatial view, carrying each element's release state.
+
+    The geometry is built from validated graph data; the release state is
+    attached here so the viewer cannot draw unresolved steel the same way it
+    draws approved steel. A spatial view that looks finished while the
+    schedule says otherwise is a picture that contradicts its own numbers.
+    """
+    if fallback.is_recorded(run_id):
+        try:
+            return fallback.scene(run_id)
+        except KeyError as exc:
+            raise HTTPException(404, "unknown recorded run") from exc
     _, ctx = _require(run_id)
     built = build_scene(ctx.graph)
     payload = built.to_dict()
     if ctx.schedule:
         payload["self_check"] = self_check(built, ctx.schedule)
+        approved = ctx.rulebook.is_approved()
+        by_element: dict[str, list[str]] = {}
+        for item in ctx.schedule.items:
+            decision = ctx.chain.release_status(
+                claim_subject(item.element_key or "", item.claim_id),
+                rulebook_approved=approved)
+            by_element.setdefault(item.element_key or "", []).append(
+                decision.state.value)
+        blocked = {e.split(" [")[0].strip()
+                   for e in (ctx.schedule.exceptions or [])}
+        for node in payload.get("nodes", []):
+            states = by_element.get(node["element_key"], [])
+            node["claims"] = {
+                "released": states.count("released"),
+                "review": states.count("review"),
+                "blocked": states.count("block") + (
+                    1 if node["element_key"] in blocked else 0),
+            }
+            # the drawing style follows the weakest claim on the element
+            node["release_state"] = (
+                "blocked" if node["claims"]["blocked"] else
+                "review" if node["claims"]["review"] else
+                "released" if node["claims"]["released"] else "pending")
     return payload
 
 
 @app.get("/runs/{run_id}/viewer", response_class=HTMLResponse)
 def viewer(run_id: str) -> str:
-    """Spatial Interpretation / Completeness View. Not a BIM model."""
-    _require(run_id)
-    return VIEWER_HTML
+    """Spatial Interpretation / Completeness View. Not a BIM model.
+
+    The run id is injected from the route so the page works when opened
+    directly, with no query string to remember or lose.
+    """
+    if not fallback.is_recorded(run_id):
+        _require(run_id)
+    return VIEWER_HTML.replace("__RUN_ID__", json.dumps(run_id))
 
 
 @app.get("/runs/{run_id}/evidence")

@@ -74,6 +74,21 @@ class EvidenceRecord(BaseModel):
         ).hexdigest()
 
 
+def claim_subject(element_key: str, claim_id: str | None = None) -> str:
+    """The subject a release decision is made about.
+
+    Release is a per-claim question, not a per-element one. A pile whose
+    longitudinal bars are fully resolved and whose spiral is still waiting on
+    a run length has one releasable claim and one that is not; keying the
+    decision on the element forces both to share an answer, and the safe
+    shared answer is to block the resolved one too.
+
+    The element key alone is still accepted so that element-wide facts —
+    a conflicting count, a missing placement — keep a subject of their own.
+    """
+    return f"{element_key}#{claim_id}" if claim_id else element_key
+
+
 class EvidenceChain:
     """In-process chain. The AWS deployment persists each record to DynamoDB."""
 

@@ -52,11 +52,28 @@ class StepMetrics:
         }
 
 
+class StepStatus(str, Enum):
+    """Why a step is or is not in the result set.
+
+    "not run" is three different facts wearing one label: the step does not
+    apply to this route, the step is not implemented yet, or the step should
+    have run and did not. A demo timeline that cannot tell them apart lets a
+    skipped interpretation look like a deliberate choice.
+    """
+
+    EXECUTED = "executed"
+    NOT_APPLICABLE = "not_applicable"    # this route does not use the step
+    NOT_IMPLEMENTED = "not_implemented"  # no handler in this build
+    MISSING = "missing"                  # required here and absent — a failure
+    WAITING = "waiting"                  # suspended on a human
+
+
 @dataclass
 class StepResult:
     step_no: int
     name: str
     ok: bool
+    status: StepStatus = StepStatus.EXECUTED
     output: Any = None
     error: str | None = None
     input_hash: str = ""
@@ -76,6 +93,14 @@ class Run:
     context: dict[str, Any] = field(default_factory=dict)
     pending_token: str | None = None
     pending_step: int | None = None
+    #: which execution route this run took (spec s3.1)
+    route: str | None = None
+    #: step_no -> why it was not executed
+    skipped: dict[int, "StepStatus"] = field(default_factory=dict)
+    #: pass number within the same run id (spec s14.2). An approval continues
+    #: the run rather than starting a new one, and the client needs to see
+    #: that: the same job, second pass, not a second job.
+    iteration: int = 1
 
     def completed_steps(self) -> list[int]:
         return sorted(n for n, r in self.results.items() if r.ok)
@@ -125,16 +150,32 @@ class WorkflowRunner:
             self.token = token
             self.question = question
 
-    def __init__(self, strict: bool = True) -> None:
-        """``strict`` refuses to run when a step has no handler.
+    def __init__(self, strict: bool = True,
+                 required: set[str] | None = None) -> None:
+        """``strict`` refuses to run when a *required* step has no handler.
 
         Silently skipping is convenient while scaffolding and dangerous in a
         client demo: a run can report "completed" having skipped
-        interpretation entirely. Demo and production use strict=True; only
-        tests and development may relax it.
+        interpretation entirely.
+
+        ``required`` is the set of step names this route genuinely depends
+        on. Steps outside it are recorded as not-applicable or
+        not-implemented and are visible as such; steps inside it must have a
+        handler or the run fails. Demanding all 23 would force either a
+        permanently failing run or a set of stub handlers that report success
+        without doing anything, which is worse than skipping openly.
         """
         self.strict = strict
+        self.required = required
         self._handlers: dict[str, Callable[[Run], Any]] = {}
+
+    def _is_required(self, name: str) -> bool:
+        """With no route supplied, strict means every step is required.
+
+        That is the safe default: a caller who asks for strictness without
+        saying which steps matter is asking for nothing to be skipped.
+        """
+        return True if self.required is None else name in self.required
 
     def handler(self, name: str) -> Callable:
         if name not in BY_NAME:
@@ -153,16 +194,25 @@ class WorkflowRunner:
                 break
             if run.is_done(step.no):
                 continue  # idempotent replay
+            if self.required is not None and step.name not in self.required:
+                # Implemented, but this route does not take it. Running every
+                # handler we happen to have would make all three routes look
+                # identical, which defeats the point of having routes.
+                run.skipped[step.no] = StepStatus.NOT_APPLICABLE
+                continue
             fn = self._handlers.get(step.name)
             if fn is None:
-                if self.strict:
+                if self.strict and self._is_required(step.name):
                     run.state = RunState.FAILED
                     run.results[step.no] = StepResult(
                         step_no=step.no, name=step.name, ok=False,
-                        error=f"step {step.no} {step.name!r} has no registered handler",
+                        status=StepStatus.MISSING,
+                        error=(f"step {step.no} {step.name!r} is required on "
+                               f"this route and has no registered handler"),
                         finished_at=datetime.now(timezone.utc),
                     )
                     return run
+                run.skipped[step.no] = StepStatus.NOT_IMPLEMENTED
                 continue
             result = StepResult(
                 step_no=step.no, name=step.name, ok=False,

@@ -236,7 +236,10 @@ def read_pile_project(pdf_path: str | Path, project_id: str) -> ExtractionResult
         params={k: v for k, v in (("diameter", diameter_mm), ("length", length_mm))
                 if v is not None},
         placements=[
-            Placement(x=i * 3000.0, y=0.0, sheet=sheet_ref) for i in range(instances)
+            # evenly spaced for legibility; the schedule gives a count, not
+            # plan coordinates, so the placement is schematic
+            Placement(x=i * 3000.0, y=0.0, sheet=sheet_ref, schematic=True)
+            for i in range(instances)
         ],
         source=SourceTier.NATIVE_TEXT,
     )

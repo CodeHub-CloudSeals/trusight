@@ -117,9 +117,17 @@ def build_scene(graph: ProjectKnowledgeGraph) -> Scene:
             node.issues.append("element has no placement on any sheet")
         else:
             node.placements = [
-                {"x": p.x, "y": p.y, "z": p.z, "rotation": p.rotation_deg}
+                {"x": p.x, "y": p.y, "z": p.z, "rotation": p.rotation_deg,
+                 "schematic": p.schematic}
                 for p in el.geometry.placements
             ]
+            if any(p.schematic for p in el.geometry.placements):
+                # The viewer must not present a laid-out row as a surveyed
+                # one. This is a statement about the coordinates only; the
+                # count and the geometry are still evidence-backed.
+                node.issues.append(
+                    "placement is schematic: the source states a count, not "
+                    "plan coordinates")
 
         if el.conflicts:
             node.state = "conflicted"

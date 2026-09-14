@@ -112,6 +112,15 @@ def resolve(bend_type: str | None, legs: dict[str, int]) -> ShapeDef:
     length, so it remains usable when generating a length rather than
     checking one.
     """
+    if bend_type is not None and not isinstance(bend_type, str):
+        # A bend type arriving as a number means something upstream accepted
+        # an answer it should have rejected. Raising the module's own error
+        # keeps that a handled exception the run can report, rather than an
+        # AttributeError that fails the whole run with a 500.
+        raise ShapeResolutionError(
+            f"bend type must be a shape reference such as '2' or 'T3'; "
+            f"got {bend_type!r}"
+        )
     bt = (bend_type or "").strip()
     candidates = CATALOGUE.get(bt)
     if candidates is None:

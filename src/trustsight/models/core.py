@@ -215,6 +215,12 @@ class Placement(BaseModel):
     z: float = 0.0
     rotation_deg: float = 0.0
     sheet: SheetRef | None = None
+    #: True when the coordinates are a legible arrangement rather than a
+    #: position read from the drawing. A schedule gives a count, not plan
+    #: coordinates; spacing those elements evenly is a drawing convenience.
+    #: Anything that displays geometry must say which of the two it has —
+    #: a laid-out row of piles looks exactly like a surveyed one.
+    schematic: bool = False
 
 
 class Geometry(BaseModel):

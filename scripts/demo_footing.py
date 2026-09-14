@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from trustsight.engine.rulebook import Rulebook  # noqa: E402
-from trustsight.evidence.fabric import EvidenceChain  # noqa: E402
+from trustsight.evidence.fabric import EvidenceChain, claim_subject  # noqa: E402
 from trustsight.extraction.barlist import parse_bar_list  # noqa: E402
 from trustsight.graph.knowledge_graph import ProjectKnowledgeGraph  # noqa: E402
 from trustsight.knowledge.project import ProjectKnowledge, Scope  # noqa: E402
@@ -35,7 +35,8 @@ def show(ctx: PipelineContext, run: Run, title: str) -> None:
         print(f"\n{'qty':>6} {'size':>5} {'length':>8} {'mark':>7} {'mass kg':>10}  release")
         for it in ctx.schedule.items:
             rel = ctx.chain.release_status(
-                it.element_key or "", rulebook_approved=ctx.rulebook.is_approved())
+                claim_subject(it.element_key or "", it.claim_id),
+                rulebook_approved=ctx.rulebook.is_approved())
             print(f"{it.quantity:>6} {it.size.value:>5} {it.cutting_length_mm:>8} "
                   f"{(it.mark or '-'):>7} {it.total_mass_kg:>10.1f}  {rel.state.value}")
         print(f"{'':>30}{'TOTAL':>7} {ctx.schedule.total_mass_kg:>10.1f} kg")

@@ -263,7 +263,11 @@ def read_footing_project(source: str | Path, project_id: str) -> ExtractionResul
         primitive="box",
         params={k: v for k, v in (("width", plan_mm), ("depth", plan_mm),
                                   ("length", thickness_mm)) if v is not None},
-        placements=[Placement(x=i * 4000.0, y=0.0, sheet=sheet_ref)
+        # Spacing here is a layout convenience, not a surveyed position: the
+        # sketches give no plan coordinates. It is tagged schematic so the
+        # spatial view says so rather than implying a source-derived layout.
+        placements=[Placement(x=i * 4000.0, y=0.0, sheet=sheet_ref,
+                              schematic=True)
                     for i in range(instances)],
         source=SourceTier.NATIVE_TEXT,
     )

@@ -111,6 +111,59 @@ for name, path in (("BBS export", f"/runs/{rid}/export/bbs"),
     except Exception as e:
         check(name, False, str(e))
 
+# 6 ── measured value, and the refusals that keep it honest ──────────────────
+print("\nvalue & accuracy")
+check("value screen is in the nav", "'value','Value & accuracy'" in js
+      or "Value &amp; accuracy" in js or "Value & accuracy" in js)
+roi = w.get("roi") or {}
+check("roi payload present", bool(roi))
+check("machine time measured", roi.get("effort", {}).get("machine_ms", 0) >= 0)
+check("claims counted per claim, not per document",
+      roi.get("claims", {}).get("total", 0) > 0,
+      json.dumps(roi.get("claims", {}))[:90])
+# The refusal that matters most: no baseline supplied means no saving claimed.
+saving = roi.get("saving", {})
+check("no saving claimed without an estimator baseline",
+      saving.get("available") is False and "pct_saved" not in saving,
+      json.dumps(saving)[:100])
+acc = roi.get("accuracy") or {}
+check("accuracy reports line recall", acc.get("element_recall") == 1.0,
+      str(acc.get("element_recall")))
+check("accuracy reports zero mass variance", acc.get("mass_variance_kg") == 0.0,
+      str(acc.get("mass_variance_kg")))
+try:
+    standalone = req(f"/runs/{rid}/roi")
+    check("/runs/{id}/roi agrees with the workspace payload",
+          standalone.get("claims") == roi.get("claims"))
+except Exception as e:
+    check("/runs/{id}/roi", False, str(e))
+
+# 7 ── the fallback, and that it cannot pass for live ────────────────────────
+print("\nrecorded fallback")
+try:
+    recorded = req("/fallback")
+    check("a recorded run exists", bool(recorded),
+          "none — run scripts/freeze_run.py before the demo")
+    if recorded:
+        rec_id = recorded[0]["run_id"]
+        check("recorded run reconciled with its reference",
+              recorded[0].get("verified_against_reference") is True)
+        rw = req(f"/runs/{rec_id}/workspace")
+        check("recorded run is labelled recorded", rw.get("recorded") is True)
+        check("recorded run carries its numbers",
+              rw.get("released_mass_kg", 0) > 0, f"{rw.get('released_mass_kg')} kg")
+        check("live run is not labelled recorded", w.get("recorded") is False)
+        check("recorded banner is in the UI", "recordedBanner" in js)
+        try:
+            req(f"/runs/{rec_id}/clarifications",
+                {"field_name": "legs", "value": {"A": 1}, "approver": "x",
+                 "rationale": "y"})
+            check("recorded run refuses writes", False, "the write succeeded")
+        except urllib.error.HTTPError as e:
+            check("recorded run refuses writes", e.code == 409, f"HTTP {e.code}")
+except Exception as e:
+    check("/fallback", False, str(e))
+
 # ── verdict ─────────────────────────────────────────────────────────────────
 print()
 if FAILURES:

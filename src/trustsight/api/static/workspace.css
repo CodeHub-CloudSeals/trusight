@@ -429,7 +429,31 @@ footer {
 }
 .notice.red   { border-left-color: var(--stop); background: var(--stop-soft); color: var(--stop-ink); }
 .notice.green { border-left-color: var(--ok);   background: var(--ok-soft);   color: var(--ok-ink); }
+.notice.amber { border-left-color: var(--attn); background: var(--attn-soft); color: var(--attn-ink); }
 .notice b { font-weight: 650; }
+.notice .button { margin-left: var(--s-2); vertical-align: middle; }
+
+/* Value & accuracy ------------------------------------------------------- */
+/* One bar, proportioned by claim count. A pie would imply the segments are
+   alternatives; they are stages of the same queue. */
+.claims-bar {
+  display: flex; gap: 2px; height: 10px;
+  border-radius: 99px; overflow: hidden;
+  background: var(--surface-2); margin: var(--s-3) 0 var(--s-2);
+}
+.claims-bar i { display: block; min-width: 3px; }
+.claims-key {
+  display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4);
+  font-size: var(--t-micro); letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}
+.baseline-ask {
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface-2); padding: var(--s-3) var(--s-4);
+  margin: var(--s-3) 0;
+}
+.baseline-ask input { max-width: 180px; margin-bottom: var(--s-2); }
+.baseline-ask small { display: block; color: var(--muted); font-size: var(--t-micro); line-height: 1.6; }
 
 .explanation { color: var(--muted); font-size: var(--t-small); line-height: 1.7; }
 .help-title { font-size: var(--t-lg); margin-bottom: var(--s-2); }

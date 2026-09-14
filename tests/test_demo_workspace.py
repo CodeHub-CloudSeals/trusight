@@ -92,5 +92,9 @@ def test_pdf_intake_and_source_render(client, tmp_path, monkeypatch):
 def test_dashboard_assets_and_path_validation(client):
     assert client.get('/').status_code == 200
     assert client.get('/assets/workspace.js').status_code == 200
-    assert client.get('/assets/construction-context.png').status_code == 200
+    # the stock photographs were replaced by inline SVG diagrams; what the
+    # image must still carry is the vendored viewer dependency, because a
+    # client network that blocks public CDNs would otherwise show empty 3D
+    assert client.get('/assets/logo.svg').status_code == 200
+    assert client.get('/assets/vendor/three.module.js').status_code == 200
     assert client.post('/runs',json={'project_id':'../elsewhere'}).status_code==400
