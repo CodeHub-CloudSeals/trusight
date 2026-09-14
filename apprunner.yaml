@@ -1,0 +1,19 @@
+# App Runner source-code deployment (no Docker needed).
+# Only used if you point App Runner at the GitHub repo instead of an ECR image.
+# The ECR/Dockerfile path is preferred because it pins Python 3.12 exactly.
+version: 1.0
+runtime: python3
+build:
+  commands:
+    build:
+      - pip install --no-cache-dir -r requirements.txt
+run:
+  command: uvicorn trustsight.api.main:app --host 0.0.0.0 --port 8080
+  network:
+    port: 8080
+  env:
+    - name: PYTHONPATH
+      value: src
+    # Deliberately NOT setting STATE_MACHINE_ARN: that flips the app into
+    # CLOUD_MODE, which routes runs to Step Functions and breaks the seeded
+    # demo. Leave it unset until the cloud path is actually wired.
