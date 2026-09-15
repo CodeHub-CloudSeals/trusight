@@ -71,6 +71,14 @@
     <div class="top-actions">
       <span class="sample-chip" id="data-basis">SAMPLE PROJECT</span>
 
+      <div class="bell-wrap">
+        <button class="quiet" id="alerts-open" title="Alerts for this run" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24"><path d="M18 16V11a6 6 0 10-12 0v5l-1.5 2.5h15zM10 21h4"/></svg>
+          <span class="alert-count" id="alert-count" hidden>0</span>
+        </button>
+        <div class="bell-panel" id="alerts-panel" hidden role="dialog" aria-label="Alerts"></div>
+      </div>
+
       <button class="quiet" id="walkthrough" title="Play a guided walkthrough">
         <svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg>
         <span>Walkthrough</span>

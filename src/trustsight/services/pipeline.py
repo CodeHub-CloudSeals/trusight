@@ -84,6 +84,10 @@ class PipelineContext:
     #: keep the same run id and increment this, so a client can see that the
     #: second pass is the same job continuing, not a fresh run.
     iteration: int = 1
+    #: NOTIFY-101 bookkeeping: when each alert was first raised and which have
+    #: been read. The alerts themselves are derived from run state, so this
+    #: holds only what state cannot tell you.
+    alerts: Any = None
 
     def start_waiting(self) -> None:
         """Mark the moment the run handed work back to a person."""

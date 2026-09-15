@@ -30,6 +30,9 @@ Run these in order. Every one is a hard gate except where marked.
 | 12 | Roles | `curl -s -X POST $URL/runs/<id>/clarifications -H 'x-trustsight-user: commercial@demo-client.com' …` | **403** — a Viewer is refused by the API, not by a hidden button |
 | 13 | Ask | ask it something ungroundable in the UI | it declines rather than guessing |
 | 14 | Interface | `python deploy/verify_ui.py $URL` | `ALL CHECKS PASSED` — contrast at AA on every screen in both themes, no sideways scroll at phone width, no console errors |
+| 15 | Persistence | restart the service, then reopen a project you created | it is still there. Projects are written to `$TRUSTSIGHT_STATE` (default `data/state/projects.json`) |
+| 16 | Alerts | open the bell on any run with an open question | it names the alert **and** says email/Teams transport is not configured |
+| 17 | Action gate | Ask → "approve the rulebook" as **Ana Duarte**, then again as **Commercial Team** | the reviewer gets a confirmation form; the viewer is refused, by the API |
 
 Check 14 walks the app through its own router — sign in, open the project,
 visit every tab — and measures what is actually painted. It asserts the tabs
@@ -164,7 +167,7 @@ Be careful with the saving figure. If review time in the room was thirty
 seconds, say so — the honest claim is *machine time plus measured review*,
 on one project.
 
-### 12:30 — Ask TrustSight (30 sec)
+### 12:30 — Ask TrustSight (45 sec)
 Press **/** anywhere. Ask *"what is blocked and why?"* then ask something it
 cannot ground — *"what will steel prices do next year"*.
 
@@ -173,10 +176,26 @@ cannot ground — *"what will steel prices do next year"*.
 > answer it declines. A query bar that guesses an engineering fact would undo
 > everything else you've seen."
 
+Then ask it to *do* something: *"release the bars"*.
+
+> "It won't. Nothing here releases because someone asked — release is
+> computed from the gates. What a person can do is answer a fact or sign the
+> rulebook, and both of those come back as an action with a confirmation and
+> a rationale box, which is what ends up in the evidence chain."
+
+If you have time, ask *"approve the rulebook"* on the approval scenario and
+show the confirmation card rather than pressing it.
+
 ### 13:00 — Spatial and downloads (1 min)
-**Drawing intelligence → 3D view**: released steel is solid, held steel is
-dashed amber. The picture cannot say "done" while the schedule says
-"waiting".
+The **Overview** already carries the spatial preview — scroll to *Where the
+steel is*. Released envelopes are solid green, held ones dashed amber,
+blocked ones dashed red, and the panel beside it names each state.
+
+> "The picture cannot say 'done' while the schedule says 'waiting'. And where
+> the drawing gives a count rather than coordinates, it says the arrangement
+> is indicative rather than letting you read a grid position as surveyed."
+
+**Drawing intelligence → 3D view** for the same scene, orbitable.
 
 **Download pack**: BBS as XLSX/PDF/CSV, the exception report, the evidence
 chain.

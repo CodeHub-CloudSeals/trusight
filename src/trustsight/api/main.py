@@ -17,6 +17,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
+import pymupdf
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -42,6 +43,8 @@ from ..services.pipeline import (
     rerun,
 )
 from ..services import roi as roi_service
+from ..services import revisions as revisions_service
+from ..services import notify as notify_service
 from ..workflow import routes
 from ..workflow.runner import Run, RunState
 from ..workflow.steps import STEPS, summary
@@ -89,6 +92,10 @@ CLOUD_MODE = bool(os.getenv("STATE_MACHINE_ARN"))
 _runs: dict[str, Run] = {}
 _ctx: dict[str, PipelineContext] = {}
 
+# Restore first, then seed: seeding only fills gaps, so a project a buyer
+# created before the last restart comes back rather than being replaced by a
+# fresh corpus scan.
+RESTORED_PROJECTS = prj.STORE.load()
 prj.STORE.seed_from_corpus(CORPUS, SEED_PROJECT_ID)
 
 
@@ -353,6 +360,53 @@ def get_project(project_id: str, request: Request) -> dict[str, Any]:
     return project.as_dict()
 
 
+@app.get("/api/projects/{project_id}/revisions")
+def list_revisions(project_id: str, request: Request) -> dict[str, Any]:
+    """Every drawing in the project, with its revision history (ING-101)."""
+    user = _actor(request)
+    project = prj.STORE.get(project_id, user.tenant_id)
+    if project is None:
+        raise HTTPException(404, "No such project in this tenant")
+    return {
+        "project_id": project.project_id,
+        "families": [
+            {
+                "family": family,
+                "revisions": [d.as_dict() for d in project.revisions(family)],
+                "current": next((d.document_id for d in project.revisions(family)
+                                 if d.is_current), None),
+            }
+            for family in sorted({d.family for d in project.documents})
+        ],
+    }
+
+
+@app.get("/api/projects/{project_id}/revisions/compare")
+def compare_revisions(project_id: str, family: str, request: Request,
+                      from_rev: int | None = None,
+                      to_rev: int | None = None) -> dict[str, Any]:
+    """Rev-to-rev change and quantity impact (spec v2 REV-101)."""
+    user = _actor(request)
+    project = prj.STORE.get(project_id, user.tenant_id)
+    if project is None:
+        raise HTTPException(404, "No such project in this tenant")
+    history = project.revisions(family)
+    if len(history) < 2:
+        raise HTTPException(409, (
+            f"'{family}' has {len(history)} revision(s). A comparison needs "
+            "two — upload a revised drawing and it will appear here."))
+    by_rev = {d.revision: d for d in history}
+    older = by_rev.get(from_rev) if from_rev else history[-2]
+    newer = by_rev.get(to_rev) if to_rev else history[-1]
+    if older is None or newer is None:
+        raise HTTPException(404, "No such revision of this drawing")
+    if older.revision == newer.revision:
+        raise HTTPException(422, "Pick two different revisions")
+    if older.revision > newer.revision:
+        older, newer = newer, older
+    return revisions_service.compare(family, older, newer)
+
+
 @app.post("/api/projects/{project_id}/documents")
 async def add_document(project_id: str, request: Request) -> dict[str, Any]:
     """Web upload channel (spec v2 s6). Originals are hashed and immutable."""
@@ -363,7 +417,7 @@ async def add_document(project_id: str, request: Request) -> dict[str, Any]:
     project = prj.STORE.get(project_id, user.tenant_id)
     if project is None:
         raise HTTPException(404, "No such project in this tenant")
-    if project.seeded or project.source_dir:
+    if project.seeded or project.corpus_backed:
         raise HTTPException(409, (
             "This project's drawings come from the mounted corpus and are "
             "read-only. Create a project to upload your own."))
@@ -375,19 +429,45 @@ async def add_document(project_id: str, request: Request) -> dict[str, Any]:
             raise HTTPException(413, "Use a PDF under 25 MB")
     if not payload.startswith(b"%PDF"):
         raise HTTPException(422, "Please select a PDF drawing")
+    # Reject the file for what is actually wrong with it. A bare
+    # `except Exception` here once swallowed a NameError — pymupdf was not
+    # imported in this module at all — and every upload in the product came
+    # back as "use a readable PDF", blaming the client's drawing for a missing
+    # import. Programmer errors must not be reported as user errors.
     try:
-        with pymupdf.open(stream=bytes(payload), filetype="pdf") as doc:
-            if doc.needs_pass or not 0 < len(doc) <= 100:
-                raise ValueError
-    except Exception as exc:
-        raise HTTPException(422, "Use a readable, unencrypted PDF with 1-100 pages") from exc
+        with pymupdf.open(stream=bytes(payload), filetype="pdf") as probe:
+            if probe.needs_pass:
+                raise HTTPException(422, "This PDF is password-protected")
+            if not 0 < len(probe) <= 100:
+                raise HTTPException(422, "Use a PDF with 1-100 pages")
+    except HTTPException:
+        raise
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(422, f"This PDF could not be opened: {exc}") from exc
 
     target = CORPUS / project.project_id
     target.mkdir(parents=True, exist_ok=True)
     safe = Path(filename).name.replace("/", "_")[:80] or "drawing.pdf"
     if not safe.lower().endswith(".pdf"):
         safe += ".pdf"
-    stem = f"Input-{len(project.documents) + 1:02d}-{safe}"
+
+    # A re-upload of the same drawing is a revision, not an overwrite. The
+    # superseded file moves into _revisions/ — same bytes, same hash, new
+    # location — so it stays readable while the extraction glob, which is
+    # deliberately shallow, sees only the current set. Nothing on disk that a
+    # previous run cited is ever written over.
+    superseded = next((d for d in project.documents
+                       if d.filename == safe and d.is_current), None)
+    if superseded is not None and superseded.path:
+        attic = target / "_revisions"
+        attic.mkdir(exist_ok=True)
+        old = Path(superseded.path)
+        if old.exists():
+            moved = attic / f"r{superseded.revision:02d}-{old.name}"
+            old.replace(moved)
+            superseded.path = str(moved)
+
+    stem = f"Input-{len(project.current_documents()) + 1:02d}-{safe}"
     (target / stem).write_bytes(payload)
     project.source_dir = str(target)
     doc = prj.Document(
@@ -398,7 +478,9 @@ async def add_document(project_id: str, request: Request) -> dict[str, Any]:
         path=str(target / stem))
     prj.STORE.add_document(project, doc)
     return {"project_id": project.project_id, "document": doc.as_dict(),
-            "document_count": len(project.documents)}
+            "document_count": len(project.current_documents()),
+            "revision": doc.revision,
+            "supersedes": doc.supersedes}
 
 
 @app.get("/api/channels")
@@ -821,17 +903,144 @@ class AskIn(BaseModel):
 
 
 @app.post("/runs/{run_id}/ask")
-def ask(run_id: str, body: AskIn) -> dict[str, Any]:
+def ask(run_id: str, body: AskIn, request: Request) -> dict[str, Any]:
     """Ask TrustSight (spec v2 s9). Grounded in this run, or silent.
 
-    Read-only by construction: every intent queries, none of them writes, so
-    the "unsafe actions require confirmation" rule in the acceptance criteria
-    is satisfied by there being no unsafe action to reach from here.
+    Answering is read-only. A question that asks for something to be *done*
+    comes back with a proposal describing the action, the capability it needs
+    and what must be confirmed — never with the action performed (COP-102).
     """
     if fallback.is_recorded(run_id):
         raise HTTPException(409, "Ask is not available on a recorded run")
+    user = _actor(request)
     run, ctx = _require(run_id)
-    return ask_service.answer(body.question, ctx, run, workspace_payload(run_id))  # noqa: F821
+    body_out = ask_service.answer(body.question, ctx, run, workspace_payload(run_id))
+    proposal = body_out.get("proposed_action")
+    if proposal and proposal.get("requires_capability"):
+        # Say plainly whether *this* person could run it. The server enforces
+        # it again at execution; this only stops a reviewer being invited to
+        # press something that will refuse them.
+        cap = proposal["requires_capability"]
+        permitted = getattr(prj.ROLES[user.role], f"can_{cap}", False)
+        proposal["permitted_for_you"] = bool(permitted)
+        if not permitted:
+            proposal["available"] = False
+            proposal["unavailable_reason"] = (
+                f"your role ({prj.ROLES[user.role].label}) cannot {cap.replace('_', ' ')}")
+    return body_out
+
+
+class ActIn(BaseModel):
+    action: str
+    confirm: bool = False
+    rationale: str = ""
+    token: str | None = None
+
+
+@app.post("/runs/{run_id}/ask/act")
+def ask_act(run_id: str, body: ActIn, request: Request) -> dict[str, Any]:
+    """Run an action the query bar proposed (spec v2 COP-102).
+
+    Three gates, in this order, all on the server:
+
+    1. the action exists and is applicable to this run right now;
+    2. the actor's role carries the capability — a hidden button is not a
+       control, and this is the same check the rest of the API uses;
+    3. the caller explicitly confirmed *and* gave a rationale, which is
+       recorded against their name. A confirmation with nothing to record is
+       a click-through, and this product's whole argument is that a human
+       decision leaves a trace.
+    """
+    if fallback.is_recorded(run_id):
+        raise HTTPException(409, "A recorded run cannot be acted on")
+    user = _actor(request)
+    run, ctx = _require(run_id)
+
+    spec = ask_service.ACTIONS.get(body.action)
+    if spec is None:
+        raise HTTPException(404, (
+            f"No such action. This build offers: "
+            f"{', '.join(sorted(ask_service.ACTIONS))}."))
+
+    proposal = ask_service.propose(spec.key, ctx, run)
+    if not proposal["available"]:
+        raise HTTPException(409, proposal["unavailable_reason"])
+
+    _needs(user, spec.capability)
+
+    if not body.confirm:
+        raise HTTPException(428, (
+            f"{spec.label} was not confirmed. {spec.effect} Send confirm=true "
+            "with a rationale to proceed."))
+    if len(body.rationale.strip()) < 4:
+        raise HTTPException(422, (
+            "A rationale is required. It is recorded against your name in the "
+            "evidence chain, which is the only reason the confirmation means "
+            "anything."))
+
+    if spec.key == "approve_rulebook":
+        if not run.pending_token:
+            raise HTTPException(409, "This run has no pending approval token")
+        return approve(run_id, ApprovalIn(
+            token=run.pending_token, approver=user.name,
+            answer={"subject": "rulebook_approval", "decision": "approved"},
+            rationale=body.rationale.strip()), request)
+
+    # generate_pack
+    produced = exports_available(ctx)
+    ctx.chain.append(
+        subject="output_pack", claim_type="approval",
+        value={"action": "generate_pack", "outputs": produced},
+        produced_by="ask.act", approver=user.name,
+        rationale=body.rationale.strip())
+    return {"action": spec.key, "performed_by": user.name,
+            "outputs": produced,
+            "note": ("Generated from what had already released. No quantity "
+                     "changed and nothing was approved by this action.")}
+
+
+def exports_available(ctx: Any) -> list[str]:
+    """Which export files this run can actually produce right now."""
+    if not ctx.schedule or not ctx.schedule.items:
+        return []
+    names = ["bbs.csv", "exceptions.csv", "evidence.json"]
+    if exports.xlsx_available():
+        names.insert(1, "bbs.xlsx")
+    names.insert(1, "bbs.pdf")
+    return names
+
+
+@app.get("/runs/{run_id}/notifications")
+def notifications(run_id: str, request: Request) -> dict[str, Any]:
+    """Alerts true of this run (spec v2 NOTIFY-101).
+
+    Each one states its own delivery: this build has no mail or Teams
+    transport, and says so on every alert rather than implying something was
+    sent.
+    """
+    user = _actor(request)
+    if fallback.is_recorded(run_id):
+        return {"alerts": [], "recorded": True,
+                "note": "A recorded run raises no alerts."}
+    run, ctx = _require(run_id)
+    payload = workspace_payload(run_id)
+    alerts = notify_service.current(run, ctx, payload.get("released_mass_kg"))
+    role = prj.ROLES[user.role]
+    for a in alerts:
+        a["actionable_by_you"] = bool(
+            getattr(role, f"can_{a['audience_capability']}", False))
+    return {"alerts": alerts,
+            "unread": sum(1 for a in alerts if not a["read"]),
+            "transport": {"email": False, "teams": False,
+                          "note": notify_service.TRANSPORT_NOTE}}
+
+
+@app.post("/runs/{run_id}/notifications/{alert_id}/read")
+def read_notification(run_id: str, alert_id: str, request: Request) -> dict[str, Any]:
+    _actor(request)
+    _run, ctx = _require(run_id)
+    notify_service.mark_read(ctx, alert_id)
+    return {"alert_id": alert_id, "read": True}
 
 
 @app.get("/ask/examples")

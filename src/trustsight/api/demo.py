@@ -131,6 +131,12 @@ def register(app, api):
                 entry = {"kind": "decision",
                          "label": str(r.subject).replace("_", " "),
                          "detail": json.dumps(v) if v else ""}
+            # The rationale is why the decision was made and is the reason the
+            # confirmation step exists at all. Showing the serialised payload
+            # instead put `{"subject": "rulebook_approval", "decision":
+            # "approved"}` on the timeline where a person's sentence belongs.
+            if r.rationale:
+                entry["detail"] = r.rationale
             history.append({**r.model_dump(mode="json"), **entry})
         executed = {r.name for r in run.results.values()}
         released_mass = round(sum(i["quantity"] * i["cutting_length_mm"] / 1000 * i["explanation"]["unit_mass"] for i in items if i["release"] == "released"), 1)

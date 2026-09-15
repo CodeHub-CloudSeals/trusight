@@ -44,6 +44,11 @@ SCREENS = [
     ("value", "go('value')"),
     ("evidence", "go('evidence')"),
     ("capabilities", "go('capabilities')"),
+    # Overlays are what a presenter opens in front of the client and what a
+    # tab-walking checker never sees. Both are opened here on purpose.
+    ("alerts", "document.querySelector('#alerts-open').click()"),
+    ("ask-action", "document.querySelector('#alerts-open').click();"
+                   "openAsk();setTimeout(()=>askNow('approve the rulebook'),150)"),
 ]
 
 _SRGB = re.compile(r"color\(srgb([^)]*)\)")
@@ -208,7 +213,8 @@ async def main(base: str) -> int:
                                 " return b.width > 200 && b.height > 200"
                                 "   && m.innerHTML.length > 1500; }",
                                 timeout=60000)
-                        await page.wait_for_timeout(700)
+                        await page.wait_for_timeout(1400 if name.startswith(
+                            ("alerts", "ask")) else 700)
                     except Exception as exc:
                         print(f"  FAIL  {theme:<5} {name:<12} could not be reached: "
                               f"{str(exc).splitlines()[0]}")
@@ -229,7 +235,8 @@ async def main(base: str) -> int:
             # A checker that silently never navigated would report every screen
             # clean. If the tabs all measure the same, it measured one screen
             # eleven times.
-            tabs = [v for k, v in seen.items() if k not in ("sign-in", "projects")]
+            tabs = [v for k, v in seen.items()
+                    if k not in ("sign-in", "projects", "alerts", "ask-action")]
             if len(set(tabs)) < 3:
                 print(f"  FAIL  {theme:<5} {'navigation':<12} "
                       f"tabs did not render distinctly: {seen}")

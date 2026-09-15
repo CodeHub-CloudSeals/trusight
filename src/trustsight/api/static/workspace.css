@@ -870,6 +870,57 @@ tr.clickable.selected { background: var(--accent-soft); box-shadow: inset 3px 0 
 .scene-view { width: 100%; height: 520px; background: var(--nav); display: block; touch-action: none; }
 .view-note { padding: var(--s-3) var(--s-5); background: var(--surface-2); color: var(--muted); font-size: var(--t-tiny); }
 
+/* 3D-101 — the dashboard preview. Shorter than the full viewer and inert:
+   pointer-events are off in compact mode so scrolling the overview never
+   gets captured by a canvas that cannot be interacted with anyway. */
+.preview-3d { overflow: hidden; }
+/* The scene is tall and narrow — a row of 12 m piles — and the panel is wide.
+   Scaled to fill the width it would be unreadable, and left alone it floats in
+   the middle of an empty band. So the width goes to something worth reading:
+   what the colours on it actually mean. */
+.preview-3d-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(260px, 1fr);
+}
+.scene-preview {
+  width: 100%; height: 330px; background: var(--nav); display: block;
+}
+.preview-3d[data-failed] .preview-3d-layout { display: block; }
+.preview-3d[data-failed] .scene-preview { display: none; }
+.preview-3d[data-failed]::before {
+  content: "The spatial view could not be built for this run. The schedule is unaffected.";
+  display: block; padding: var(--s-5); color: var(--muted); font-size: var(--t-small);
+}
+.preview-3d-side {
+  padding: var(--s-5);
+  border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: var(--s-3);
+}
+.preview-3d-side .button { align-self: flex-start; margin-top: auto; }
+.preview-3d-side .preview-basis { margin: 0; }
+.legend-row {
+  display: grid; grid-template-columns: 18px 2.5em 1fr;
+  align-items: baseline; gap: var(--s-3);
+  font-size: var(--t-small);
+}
+.legend-row b { font-variant-numeric: tabular-nums; text-align: right; }
+.legend-row span { color: var(--ink-2); }
+.legend-row small { display: block; color: var(--muted); font-size: var(--t-tiny); }
+.legend-row .sw { position: relative; top: -3px; }
+.sw { width: 16px; height: 0; border-top-width: 2px; display: inline-block; }
+@media (max-width: 900px) {
+  .preview-3d-layout { grid-template-columns: 1fr; }
+  .preview-3d-side { border-left: 0; border-top: 1px solid var(--line); }
+}
+.sw-released { border-top-style: solid; border-top-color: #2f8f70; }
+.sw-held { border-top-style: dashed; border-top-color: #9a6c14; }
+.sw-blocked { border-top-style: dashed; border-top-color: #b5453a; }
+.sw-pending { border-top-style: dotted; border-top-color: #55647f; }
+:root[data-theme="dark"] .sw-released { border-top-color: #7ccbb1; }
+:root[data-theme="dark"] .sw-held { border-top-color: #e8c17c; }
+:root[data-theme="dark"] .sw-blocked { border-top-color: #e8897f; }
+:root[data-theme="dark"] .sw-pending { border-top-color: #8fa6bd; }
+
 .fact {
   display: flex; align-items: center; justify-content: space-between; gap: var(--s-3);
   width: 100%; text-align: left;
@@ -1506,3 +1557,77 @@ body.stage-open .sidebar, body.stage-open .app { display: none; }
 .impact-pair > div { padding-left: var(--s-3); border-left: 2px solid var(--line); }
 .impact-pair strong { display: block; font-size: var(--t-2xl); font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .impact-pair small { color: var(--muted); font-size: var(--t-micro); }
+
+/* ── 11. Alerts (NOTIFY-101) ───────────────────────────────────────────────
+   A bell that can only ever show what the run state already says: the panel
+   is repainted from the same refresh that repaints the screen, so the count
+   and the page cannot disagree. Every panel states its delivery once, at the
+   bottom, because an alert list with no transport note reads as though mail
+   went out. */
+.bell-wrap { position: relative; }
+#alerts-open { position: relative; }
+.alert-count {
+  position: absolute; top: 1px; right: 1px;
+  min-width: 15px; height: 15px; padding: 0 4px;
+  border-radius: 999px;
+  background: var(--attn); color: #26190a;
+  font: 700 10px/15px var(--font); text-align: center;
+}
+.bell-panel {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
+  width: min(380px, calc(100vw - 32px));
+  background: var(--surface-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 18px 44px rgba(10, 42, 94, .18);
+  overflow: hidden;
+}
+.bell-head {
+  padding: var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--t-micro); letter-spacing: .07em; text-transform: uppercase;
+  color: var(--muted);
+}
+.bell-empty, .bell-foot {
+  padding: var(--s-4) var(--s-5);
+  color: var(--muted); font-size: var(--t-tiny); line-height: 1.55;
+}
+.bell-foot { border-top: 1px solid var(--line); background: var(--surface-2); }
+.alert-row {
+  display: grid; grid-template-columns: 10px 1fr; gap: var(--s-3);
+  padding: var(--s-4) var(--s-5);
+  border-bottom: 1px solid var(--line);
+}
+.alert-row:last-of-type { border-bottom: 0; }
+.alert-row.is-read { opacity: .62; }
+.alert-row b { display: block; font-size: var(--t-small); }
+.alert-row p { margin: 2px 0 0; color: var(--ink-2); font-size: var(--t-tiny); line-height: 1.55; }
+.alert-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; }
+.alert-dot.act { background: var(--attn); }
+.alert-dot.ok { background: var(--ok); }
+.alert-meta {
+  display: flex; align-items: center; gap: var(--s-3);
+  margin-top: var(--s-2);
+  color: var(--muted); font-size: var(--t-micro);
+}
+.alert-meta .quiet { margin-left: auto; }
+
+/* Ask: a proposed action, and the confirmation in front of it. */
+.ask-action {
+  margin-top: var(--s-4); padding: var(--s-4);
+  border: 1px solid var(--line-strong); border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.ask-action h4 { margin: 0 0 4px; font-size: var(--t-small); }
+.ask-action p { margin: 0 0 var(--s-3); color: var(--ink-2); font-size: var(--t-tiny); line-height: 1.6; }
+.ask-action .refused { color: var(--muted); }
+.ask-action input[type=text] { width: 100%; margin-bottom: var(--s-3); }
+.ask-action .warn-line {
+  display: flex; align-items: center; gap: var(--s-2);
+  color: var(--stop-ink); font-size: var(--t-micro); margin-bottom: var(--s-3);
+}
+.act-confirm {
+  display: flex; align-items: center; gap: var(--s-2);
+  font-size: var(--t-tiny); color: var(--ink-2);
+}
+.act-confirm input { width: auto; margin: 0; }

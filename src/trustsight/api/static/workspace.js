@@ -20,6 +20,7 @@ const ui = {
   chevL:'<path d="M15 6l-6 6 6 6"/>',
   chevR:'<path d="M9 6l6 6-6 6"/>',
   shield:'<path d="M12 2l8 4v6c0 5-8 10-8 10S4 17 4 12V6zM8 11l3 3 5-6"/>',
+  alert:'<path d="M12 3l9.5 17h-19zM12 10v4M12 17.2v.1"/>',
 };
 const ic = (name, size = 14) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ui[name]}</svg>`;
 /* Every request names who is acting. The server enforces the role; this only
@@ -36,14 +37,14 @@ const post = (path,body)=>api(path,{method:'POST',headers:{'Content-Type':'appli
 const esch = s => String(s??'').replace(/"/g,'&quot;');
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(state.toastTimer);state.toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),4500);}
 function tag(text,color=''){return `<span class="tag ${color}">${esc(text)}</span>`;}
-function button(text,action,style=''){return `<button class="button ${style}" onclick="${action}">${text}</button>`;}
+function button(text,action,style='',type='button'){return `<button type="${type}" class="button ${style}"${action?` onclick="${action}"`:''}>${text}</button>`;}
 /* A recorded run says so on every screen. The one thing a fallback must never
    do is pass for live. */
 function recordedBanner(){return state.data?.recorded?`<div class="notice amber gap"><b>Recorded run.</b> These screens are replaying a previously verified run served read-only from disk — the numbers are fixed at capture and nothing recalculates. ${button('Start a live run',"newRun()",'outline small')}</div>`:'';}
 function head(title,sub,actions=''){return recordedBanner()+`<div class="page-head"><div><div class="eyebrow">${state.data?.seeded?'Atlantic Cages / Pile reinforcement':'Engineering workspace'}</div><h1>${title}</h1><p>${sub}</p></div><div class="toolbar">${actions}</div></div>`;}
 function metric(label,value,note,color=''){return `<div class="metric${color?' metric-'+color:''}"><div class="metric-top"><span>${label}</span>${color?tag(color==='green'?'Verified':'Action needed',color):''}</div><div class="value">${value}</div><small>${note}</small></div>`;}
 function updateNav(){ $('#nav').innerHTML=navs.map(([id,label])=>`<button title="${label}" onclick="go('${id}')" class="${id===state.tab?'active':''}"><svg viewBox="0 0 24 24">${icons[id]}</svg><span class="nav-text">${label}</span>${id==='review'&&state.data?.questions.length?`<span class="count">${state.data.questions.length}</span>`:id==='review'&&state.data?.run.state==='suspended'&&state.data?.run.pending_step===19?'<span class="count">!</span>':''}</button>`).join('');$('#breadcrumb').textContent=navs.find(n=>n[0]===state.tab)[1];$('#data-basis').textContent=state.data?.recorded?'RECORDED RUN':state.data?.seeded?'SAMPLE PROJECT':'PDF PROJECT';}
-async function refresh(){state.data=await api(`/runs/${state.runId}/workspace`);updateNav();}
+async function refresh(){state.data=await api(`/runs/${state.runId}/workspace`);updateNav();refreshAlerts();}
 /* A corpus run executes in a background task, so the first workspace read can
    land while the run is still going and return nothing. Without this the
    screen sits empty and a correct read looks like a failed one. */
@@ -439,7 +440,57 @@ $('#main').innerHTML=head(headline,subline,button(`Open drawing ${ic('arrowUpRig
 <div class="metrics mt">${metric('ELEMENT INSTANCES',fmt(d.elements.reduce((s,e)=>s+e.instances,0)),conflict?'Conflicting source count':d.seeded?'Pile P1 · sample schedule':'Read from source drawing')}${metric('CALCULATED BARS',fmt(items.reduce((n,i)=>n+i.quantity,0)),items.length?`${items.length} schedule line${items.length===1?'':'s'}, deterministic`:'Nothing calculated yet')}${metric('OPEN CLARIFICATIONS',open,conflict?'Plus an element-wide conflict':'Missing facts, never guessed',open?'amber':'')}${metric('EVIDENCE RECORDS',d.evidence.records.length,'Hash chain integrity checked','green')}</div>
 <div class="grid-two"><div><div class="section-heading"><h2>Active project</h2>${tag('Session live','green')}</div><div class="panel"><div class="project-row"><div class="project-art">${miniDrawing()}</div><div class="project-info"><b>${d.seeded?'Atlantic Cages · Pile P1':esc(d.run.project_id)}</b><small>${d.seeded?'Sample schematic · S101 + S103':esc([state.project?.client,state.project?.site].filter(Boolean).join(' · ')||`${d.elements.length} element famil${d.elements.length===1?'y':'ies'} · ${esc(d.playbook||'no playbook')}`)}</small><div class="project-meta">${tag(d.seeded?'Sample inputs':'Source PDF')}${tag(status,conflict?'red':d.questions.length?'amber':'green')}</div></div>${button(`Open ${ic('arrowRight')}`,"go('drawings')",'outline small')}</div><div class="panel-pad" style="padding-top:0"><div class="progress-line"><i style="width:${conflict?0:released.length/2*100}%"></i></div><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted)"><span>${released.length} released BBS lines</span><span>${d.questions.length} questions awaiting review</span></div></div></div>${d.seeded?'':'<div class="notice mt">Real PDF intake uses the pile playbook. Scanned drawings and other element families may remain unresolved. The project rulebook requires approval.</div>'}</div>
 <div><div class="section-heading"><h2>Put trust to the test</h2><span class="muted" style="font-size:10px">DEMO SCENARIOS</span></div><div class="panel panel-pad"><div class="scenario"><span class="scenario-icon">?</span><div><b>A detail is missing. What happens?</b><p>Approve a leg dimension and see the bar schedule update.</p><button class="quiet" onclick="go('review')">Explore clarification →</button></div></div><div class="scenario"><span class="scenario-icon" style="background:var(--stop-soft);color:var(--stop-ink)">≠</span><div><b>Two sources disagree.</b><p>Preserve the conflict and prevent an unsupported release.</p><button class="quiet" onclick="start('conflict')">Run conflict scenario →</button></div></div></div></div></div>
-<div class="section-space section-heading"><div><h2>Bring your own drawing</h2><p>Native-text pile PDF · up to 25 MB · other drawing families require a new playbook</p></div><label class="button outline" for="upload">${ic('plus')} Open PDF<input id="upload" type="file" accept="application/pdf" hidden onchange="uploadPdf(this)"></label></div>`;countUp();}
+${spatialPreview()}
+<div class="section-space section-heading"><div><h2>Bring your own drawing</h2><p>Native-text pile PDF · up to 25 MB · other drawing families require a new playbook</p></div><label class="button outline" for="upload">${ic('plus')} Open PDF<input id="upload" type="file" accept="application/pdf" hidden onchange="uploadPdf(this)"></label></div>`;countUp();/* The footer counts come from the scene, which drawScene fetches. Render it
+   again once that lands, or the caption describes an empty scene while the
+   canvas shows a full one. */
+drawScene('scene-preview',{compact:true}).then(()=>{const f=$('#preview-side');if(f)f.innerHTML=previewFoot();});}
+
+/* 3D-101: the spatial preview belongs on the dashboard, not only behind a tab.
+   Two rules it must not break. It shows release state, so the picture cannot
+   read "finished" while the schedule reads "waiting"; and where the drawing
+   states a count rather than coordinates, it says the arrangement is
+   indicative rather than letting a buyer read a grid position as surveyed
+   fact (spec v2 s21: no invented steel rendered as fact). */
+/* Count what is actually drawn. Counting schedule lines instead printed
+   "0 released · 0 held" under six red envelopes, because before the first
+   calculation there are placements but no schedule rows — the caption
+   contradicting the picture directly above it. */
+function previewFoot(){
+  const nodes=state.scene?.nodes||[];
+  const drawn=[];
+  for(const n of nodes)for(const p of (n.placements||[]))drawn.push(n.release_state||(n.state==='conflicted'?'blocked':n.state==='ok'?'released':'pending'));
+  const count=k=>drawn.filter(v=>v===k).length;
+  const rows=[['released','sw-released','Released','every gate satisfied'],
+              ['review','sw-held','Calculated, held','a number exists; it is not releasable'],
+              ['blocked','sw-blocked','Blocked','a fact is missing or two sources disagree'],
+              ['pending','sw-pending','Not yet calculated','the run has not reached these']]
+    .map(([k,sw,label,why])=>[count(k),sw,label,why]).filter(r=>r[0]);
+  const schematic=nodes.some(n=>(n.placements||[]).some(p=>p.schematic));
+  const basis=!nodes.length?'Building the spatial view…'
+    :schematic?'The drawing states a count, not coordinates, so the arrangement shown is indicative. Nothing here is a surveyed position.'
+    :state.data?.seeded?'Sample geometry from the illustrative schematic project.'
+    :'Placements derived from the source drawing.';
+  return `<div class="preview-3d-side">
+    <div class="eyebrow">WHAT THE COLOURS MEAN</div>
+    ${rows.length?rows.map(([n,sw,label,why])=>`<div class="legend-row"><i class="sw ${sw}"></i><b>${n}</b><span>${label}<small>${why}</small></span></div>`).join('')
+      :'<p class="explanation">No placements in this run.</p>'}
+    <p class="explanation preview-basis">${esc(basis)}</p>
+    ${button(`Open 3D view ${ic('arrowUpRight')}`,"state.view='spatial';go('drawings')",'outline small')}
+  </div>`;
+}
+
+function spatialPreview(){
+  return `<div class="section-space">
+    <div class="section-heading"><div><h2>Where the steel is</h2>
+      <p>Concrete envelopes for this run, coloured by release state. Wireframes describe envelopes, not individual bars — this is not a fabrication or BIM model.</p></div></div>
+    <div class="panel preview-3d">
+      <div class="preview-3d-layout">
+        <canvas id="scene-preview" class="scene-preview" aria-label="Spatial preview of this run, coloured by release state"></canvas>
+        <div id="preview-side">${previewFoot()}</div>
+      </div>
+    </div></div>`;
+}
 async function uploadPdf(input){if(!input.files[0])return;toast('Checking PDF…');try{const r=await api('/projects/upload',{method:'POST',headers:{'Content-Type':'application/pdf'},body:input.files[0]});await start('clarification',r.project_id);}catch(e){toast(e.message);input.value='';}}
 function miniDrawing(){return '<svg viewBox="0 0 70 75" fill="none" stroke="#597871"><rect x="7" y="7" width="56" height="60"/><path d="M16 20h38M16 25h38M16 30h38M20 36v22h9V36zM37 36v22h9V36zM12 62h46" stroke-width=".7"/></svg>';}
 function sampleDrawing(){const conflict=state.data.scenario==='conflict';const resolved=['structured','approval'].includes(state.data.scenario);const circles=Array.from({length:12},(_,i)=>{const a=i*Math.PI/6;return `<circle cx="${478+49*Math.cos(a)}" cy="${230+49*Math.sin(a)}" r="3" fill="#3c5554"/>`;}).join('');return `<svg viewBox="0 0 700 610" role="img" aria-label="Illustrative pile drawing with selectable count, diameter, length and reinforcement callouts. Not for construction."><defs><pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0v7" stroke="#a3aaa0" stroke-width=".55"/></pattern><marker id="arr" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse"><path d="M6 0L0 3l6 3" fill="none" stroke="#58716b" stroke-width=".7"/></marker></defs><rect x="22" y="22" width="656" height="566" fill="none" stroke="#607367" stroke-width="1"/><g font-family="ui-monospace,monospace" fill="#415b52"><text x="42" y="49" font-size="11" letter-spacing="1">ATLANTIC CAGES / PILE REINFORCEMENT</text><path d="M42 82h616" stroke="#a0aca0"/><text x="43" y="108" font-size="10">PILE SCHEDULE</text><g fill="none" stroke="#7a8a7d" stroke-width=".7"><rect x="43" y="119" width="615" height="55"/><path d="M43 144h615M155 119v55M285 119v55M435 119v55M550 119v55"/></g><g font-size="8"><text x="55" y="135">MARK</text><text x="170" y="135">QUANTITY</text><text x="300" y="135">DIAMETER (mm)</text><text x="450" y="135">LENGTH (mm)</text><text x="565" y="135">LONGITUDINAL</text></g><g font-size="10"><text x="55" y="162">P1</text><text x="170" y="162">6 OFF</text><text x="300" y="162">1000 Ø</text><text x="450" y="162">11,150</text><text x="565" y="162">12–30M</text></g><text x="43" y="205" font-size="9">SECTION A–A</text><g stroke="#5b6f62" fill="none" stroke-width="1"><rect x="120" y="233" width="110" height="257" fill="url(#hatch)"/><rect x="139" y="233" width="72" height="257" fill="#fffef9"/><path d="M145 217v273M205 217v273" stroke-width="2"/>${Array.from({length:17},(_,i)=>`<path d="M137 ${245+i*14}h77" stroke-width=".7"/>`).join('')}<path d="M120 221v-14M230 221v-14M120 209h110" marker-start="url(#arr)" marker-end="url(#arr)"/><path d="M107 233H80M107 490H80M88 233v257" marker-start="url(#arr)" marker-end="url(#arr)"/><path d="M211 275h60l22-17M210 374h49l35-17"/></g><text x="146" y="202" font-size="9">1000 Ø</text><text x="75" y="378" transform="rotate(-90 75 378)" font-size="9">11,150 mm</text><text x="270" y="250" font-size="10">12–30M</text><text x="265" y="347" font-size="10">15M @ 350</text>${resolved?'<text x="250" y="422" font-size="8" fill="#3f8f6f">BAR LEGS: STATED</text><text x="250" y="439" font-size="8" fill="#3f8f6f">SPIRAL RUN: STATED</text>':'<text x="250" y="422" font-size="8" fill="#ab7d3d">BAR LEGS: NOT STATED</text><text x="250" y="439" font-size="8" fill="#ab7d3d">SPIRAL RUN: NOT STATED</text>'}<circle cx="478" cy="260" r="67" fill="url(#hatch)" stroke="#5b6f62"/><circle cx="478" cy="260" r="52" fill="#fffef9" stroke="#5b6f62"/><g transform="translate(0 30)">${circles}</g><path d="M420 349h116" stroke="#58716b" marker-start="url(#arr)" marker-end="url(#arr)"/><text x="448" y="365" font-size="9">1000 Ø</text><text x="418" y="390" font-size="9">PILE CROSS-SECTION</text><text x="420" y="407" font-size="8">12 equally spaced bars</text><text x="43" y="528" font-size="8">${conflict?'CONFLICT NOTE: PLAN SHOWS 8 / SCHEDULE SHOWS 6':'DIMENSIONS IN mm / SCHEMATIC ARRANGEMENT ONLY'}</text><path d="M22 545h656M430 545v43M558 545v43" stroke="#758777"/><text x="42" y="563" font-size="8">TRUSTSIGHT · DEMONSTRATION DRAWING</text><text x="446" y="563" font-size="7">SHEET</text><text x="446" y="579" font-size="10">S101 / S103</text><text x="573" y="563" font-size="7">REVISION</text><text x="573" y="579" font-size="10">DEMO 01</text></g>${[['count',155,144,130,30],['diameter',285,144,150,30],['length',435,144,115,30],['bars',552,144,104,30],['spacing',259,329,95,27]].map(([id,x,y,w,h])=>`<rect tabindex="0" role="button" aria-label="Inspect ${id}" data-fact="${id}" class="hotspot ${state.selected===id?'selected':''}" x="${x}" y="${y}" width="${w}" height="${h}" fill="transparent" stroke="#c8dcd0" stroke-dasharray="4 3"/>`).join('')}</svg>`;}
@@ -725,8 +776,52 @@ async function askNow(q){
         ${a.intent?'':tag('Not answered — no data to ground it','amber')}
         ${a.goto?button(`Open ${esc(navs.find(n=>n[0]===a.goto)?.[1]||a.goto)} ${ic('arrowRight')}`,`$('#modal').close();go('${a.goto}')`,'outline small'):''}
       </div>
+      ${actionCard(a.proposed_action)}
     </div>`;
+    const form=$('#act-form');
+    if(form)form.onsubmit=e=>{e.preventDefault();runAction(form.dataset.action);};
   }catch(e){out.innerHTML=`<div class="notice red mt">${esc(e.message)}</div>`;}
+}
+
+/* COP-102. Asking for something to be done returns a description of it, never
+   the thing done. What the presenter sees here is the effect in plain words,
+   the role it needs, and a rationale field that is not optional — a
+   confirmation that records nothing is a click-through, and the whole claim of
+   this product is that a human decision leaves a trace. */
+function actionCard(a){
+  if(!a)return '';
+  if(!a.available)return `<div class="ask-action">
+    <h4>${esc(a.label||'Not available')}</h4>
+    <p class="refused">${esc(a.unavailable_reason||'')}</p></div>`;
+  return `<div class="ask-action">
+    <h4>${esc(a.label)}</h4>
+    <p>${esc(a.effect)}</p>
+    ${a.irreversible?`<div class="warn-line">${ic('alert',13)} This cannot be undone on this run.</div>`:''}
+    <form id="act-form" data-action="${esc(a.action)}">
+      <input type="text" id="act-why" required minlength="4"
+             placeholder="Why are you doing this? Recorded against your name."
+             aria-label="Rationale">
+      <label class="act-confirm"><input type="checkbox" id="act-confirm" required>
+        I confirm: ${esc(a.label.replace(/^Sign /,'sign ').replace(/^Generate /,'generate '))}</label>
+      <div class="mt">${button(`${esc(a.label)} ${ic('arrowRight')}`,'','', 'submit')}</div>
+    </form>
+  </div>`;
+}
+
+async function runAction(action){
+  const why=$('#act-why')?.value||'',ok=$('#act-confirm')?.checked;
+  const out=$('#ask-out');
+  try{
+    await post(`/runs/${state.runId}/ask/act`,
+               {action,confirm:!!ok,rationale:why});
+    toast('Done, and recorded against your name.');
+    $('#modal').close();
+    await refreshWhenSettled();
+    render();
+  }catch(e){
+    out.insertAdjacentHTML('beforeend',
+      `<div class="notice red mt">${esc(e.message)}</div>`);
+  }
 }
 
 /* ── Diagrams ───────────────────────────────────────────────────────────────
@@ -936,7 +1031,19 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function playWalkthrough(){const btn=$('#walkthrough');if(state.playing){state.playing=false;btn.innerHTML=ic('play')+'<span>Walkthrough</span>';return;}state.playing=true;btn.innerHTML=ic('stop')+'<span>Stop</span>';const seq=['overview','drawings','review','results','evidence'];for(const tab of seq){if(!state.playing)break;go(tab);await sleep(3400);}state.playing=false;btn.innerHTML=ic('play')+'<span>Walkthrough</span>';}
 function evidence(){const d=state.data,executed=d.steps.filter(s=>s.status==='executed');$('#main').innerHTML=head('A transparent chain of decisions.','Inspect the source, the rule, the calculation and the human answer.',`<a class="button outline" href="/runs/${state.runId}/export/evidence">${ic('download',12)} Download evidence</a>`)+`${evidenceChainDiagram()}<div class="metrics">${metric('CHAIN INTEGRITY',d.evidence.chain_valid?'Verified':'Invalid',esc(d.evidence.verification),d.evidence.chain_valid?'green':'amber')}${metric('EXECUTED STEPS',executed.length,'Of 23 architecture steps')}${metric('MACHINE TIME',fmt(d.run.roi.machine_ms)+' <em>ms</em>','Measured computation; excludes review')}${metric('KNOWLEDGE REUSE',d.run.roi.reused_knowledge,'Approved facts reused this pass')}</div><div class="grid-two"><div class="panel panel-pad"><div class="section-heading"><h2>Evidence timeline</h2>${tag(d.evidence.records.length+' records')}</div><div class="trace">${d.evidence.records.map(r=>`<details><summary>${tag(r.claim_type.replaceAll('_',' '),r.claim_type==='approval'?'amber':'green')}<span>${esc(r.subject.length>55?r.subject.slice(0,52)+'…':r.subject)}</span></summary><pre>${esc(JSON.stringify({value:r.value,source:r.source,produced_by:r.produced_by,approver:r.approver,rationale:r.rationale,timestamp:r.timestamp,record_id:r.record_id,prev_hash:r.prev_hash},null,2))}</pre></details>`).join('')}</div></div><div><div class="panel panel-pad"><div class="eyebrow">RULEBOOK IN USE</div><h3 class="help-title">${esc(d.rulebook.version)}</h3><p class="explanation">Cover: ${esc(JSON.stringify(d.rulebook.cover_mm))} mm<br>Rounding: ${d.rulebook.rounding_mm} mm<br>Spacing: ${esc(d.rulebook.spacing_convention)}<br>Approved by: ${esc(d.rulebook.approved_by||'Not approved')}</p>${tag(d.seeded?'Sample rulebook':d.rulebook?.approved_by?'Approved':'Approval pending',d.seeded?'':d.rulebook?.approved_by?'green':'amber')}</div><div class="panel panel-pad mt"><div class="section-heading"><h2>Construction controls</h2></div>${d.controls.map(c=>`<div style="border-bottom:1px solid var(--line);padding:11px 0"><div style="display:flex;justify-content:space-between;font-size:11px"><b>${esc(c.control_id)}</b>${tag(c.status,c.status==='pass'?'green':c.status==='not_applicable'?'':'amber')}</div><p class="explanation" style="margin-bottom:0">${esc(c.requirement)}<br>${esc(c.rationale)}</p></div>`).join('')}</div><div class="panel panel-pad mt"><div class="section-heading"><h2>Measured value</h2>${tag('Spec s12')}</div><p class="explanation">Machine time, review time, claim-level release rate and accuracy against the client reference live on their own screen, because they are read by a different person than reads this one.</p>${button(`Open value &amp; accuracy ${ic('arrowRight')}`,"go('value')",'outline small')}</div></div></div><div class="section-space"><div class="section-heading"><h2>What actually ran</h2>${tag('Execution transparency','green')}</div><div class="notice gap">This walkthrough uses ${executed.length} implemented deterministic handlers. Model-powered extraction and specialist agents are not invoked in this local run. The remaining architecture stages are explicitly shown as not run.</div><div class="panel">${d.steps.map(s=>`<div class="process-row"><span class="process-no">${s.status==='executed'&&s.ok?ic('check',12):s.no}</span><span>${esc(s.name.replaceAll('_',' '))}</span><span class="mono muted">${esc(s.kind)}</span>${tag(s.ok===false?'Failed':s.status,s.ok===false?'red':s.status==='executed'?'green':'')}</div>`).join('')}</div></div>`;}
 function capabilities(){const cards=[['01 / INTERPRET','Read engineering drawings','Native-text pile extraction is connected. Scan-based vision, OCR and broader element interpretation need model integration.','Pile playbook live','green'],['02 / UNDERSTAND','Connect facts to quantities','Link pile counts, bar sizes, dimensions and spacing to the graph and the calculation basis.','Live in this demo','green'],['03 / CHALLENGE','Ask before assuming','Missing leg dimensions and run lengths become specific questions. Conflicting sources block the element.','Live in this demo','green'],['04 / CALCULATE','Make the arithmetic repeatable','The engineering engine computes quantities, leg-based lengths and steel mass from the same approved inputs.','Deterministic engine','green'],['05 / EXPLAIN','Trace every decision','Open a BBS line to inspect its formula, then follow the source, rule version and approval history.','Live in this demo','green'],['06 / VISUALISE','See spatial completeness','Orbit the pile envelopes derived from graph dimensions and placements. Review unresolved geometry.','Live envelope view','green'],['07 / SCALE','Add specialist AI interpretation','Schema-constrained agent modules exist for interpretation workflows. Connect a configured model and validate on held-out drawings.','Integration required','purple'],['08 / COMPARE','Understand drawing revisions','Highlight changed dimensions and their downstream quantity impact across drawing versions.','Proposed next phase','purple'],['09 / OPTIMISE','Plan stock and procurement','Optimise stock cutting, waste and purchasing after lap, stock and fabrication policies are agreed.','Proposed next phase','purple']];$('#main').innerHTML=head('The opportunity goes beyond extraction.','A clear view of what works today and what can come next.',button(`Back to the live demo ${ic('arrowRight')}`,"go('drawings')",'outline'))+`<div class="hero hero-solo"><div class="hero-copy"><div class="eyebrow">FROM SITE TO STRUCTURED DATA</div><h2>Precision measured once.<br>Reused with confidence.</h2><p>Every field survey, every reinforcement detail becomes a governed fact — interpreted by AI, calculated by deterministic engineering rules.</p></div></div>${pipelineDiagram()}<div class="notice green gap"><b>Interpretation + engineering rules + human judgment.</b> This demo proves the governed workflow with sample or native-text pile inputs. It does not call a live language or vision model.</div><div class="cap-grid">${cards.map(([n,title,desc,status,color])=>`<div class="cap-card"><div class="eyebrow">${n}</div><h3>${title}</h3><p>${desc}</p>${tag(status,color)}</div>`).join('')}</div><div class="panel panel-pad section-space"><div class="section-heading"><h2>A practical next pilot</h2>${tag('Measure before scaling')}</div><p class="explanation">Use an unseen drawing set, an estimator-approved rulebook and an independently prepared reference schedule. Measure extraction coverage, quantity variance, review time and unresolved items. Expand to another element family only after that evidence is reviewed.</p></div>`;}
-async function drawScene(){const canvas=$('#scene');if(!canvas)return;try{state.scene=await api(`/runs/${state.runId}/scene`);if(!canvas.isConnected)return;const ctx=canvas.getContext('2d'),nodes=state.scene.nodes||[];let yaw=.58,zoom=1,drag=false,lastX=0;let ratio=devicePixelRatio||1;const elements=[];for(const node of nodes){for(const p of node.placements||[])elements.push({node,p});}const maxX=Math.max(1000,...elements.map(e=>e.p.x||0)),length=Math.max(1000,...nodes.map(n=>n.params.length||1000));function paint(){if(!canvas.isConnected)return;const w=canvas.clientWidth,h=canvas.clientHeight;canvas.width=w*ratio;canvas.height=h*ratio;ctx.scale(ratio,ratio);ctx.fillStyle='#142e37';ctx.fillRect(0,0,w,h);const scale=Math.min(w/(maxX+5000),h/(length+6000))*zoom;const project=(x,y,z)=>{x-=maxX/2;y+=length/2;const rx=x*Math.cos(yaw)+z*Math.sin(yaw),rz=-x*Math.sin(yaw)+z*Math.cos(yaw);return [w/2+rx*scale,h/2-y*scale*.78+rz*scale*.4];};const line=(a,b,color,width=1,dash=0)=>{ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash?[dash,dash]:[]);ctx.beginPath();ctx.moveTo(...project(...a));ctx.lineTo(...project(...b));ctx.stroke();ctx.setLineDash([]);};for(let x=-5000;x<=maxX+5000;x+=2000)line([x,-length,-5000],[x,-length,5000],'#28454f',.6);for(let z=-5000;z<=5000;z+=2000)line([-5000,-length,z],[maxX+5000,-length,z],'#28454f',.6);/* Colour and line weight follow the release state, not the geometry state.
+/* One renderer, two sizes. The dashboard preview (3D-101) shows the same
+   scene as the full viewer, from the same endpoint, with the same release
+   styling — a second drawing routine would be a second chance to show a
+   picture that disagrees with the schedule. `compact` drops the chrome that
+   does not survive a small canvas and the interaction that a preview should
+   not capture. */
+async function drawScene(canvasId='scene',opts={}){const compact=!!opts.compact;const canvas=$('#'+canvasId);if(!canvas)return;try{/* Always refetched: the release state of a placement changes when a
+   clarification is answered, and a cached scene would keep drawing
+   steel as held after it released. */
+state.scene=await api(`/runs/${state.runId}/scene`);if(!canvas.isConnected)return;const ctx=canvas.getContext('2d'),nodes=state.scene.nodes||[];let yaw=.58,zoom=1,drag=false,lastX=0;let ratio=devicePixelRatio||1;const elements=[];for(const node of nodes){for(const p of node.placements||[])elements.push({node,p});}const xs=elements.map(e=>e.p.x||0),zs=elements.map(e=>e.p.y||0);const maxX=Math.max(1000,...xs),length=Math.max(1000,...nodes.map(n=>n.params.length||1000));/* Centre on the placements themselves. Centring on maxX/2 assumes the set
+   starts at the origin, and a project whose first pile is at x=40000 drew
+   itself off the side of the canvas. */
+const midX=xs.length?(Math.min(...xs)+Math.max(...xs))/2:0,midZ=zs.length?(Math.min(...zs)+Math.max(...zs))/2:0,spanX=Math.max(2000,(Math.max(...xs,0)-Math.min(...xs,0))),spanZ=Math.max(2000,(Math.max(...zs,0)-Math.min(...zs,0)));function paint(){if(!canvas.isConnected)return;const w=canvas.clientWidth,h=canvas.clientHeight;canvas.width=w*ratio;canvas.height=h*ratio;ctx.scale(ratio,ratio);ctx.fillStyle='#142e37';ctx.fillRect(0,0,w,h);const scale=Math.min(w/(spanX+8000),h/(length+6000),w/(spanZ+8000))*zoom*(compact?.92:1);const project=(x,y,z)=>{x-=midX;z-=midZ;y+=length/2;const rx=x*Math.cos(yaw)+z*Math.sin(yaw),rz=-x*Math.sin(yaw)+z*Math.cos(yaw);return [w/2+rx*scale,h/2-y*scale*.78+rz*scale*.4];};const line=(a,b,color,width=1,dash=0)=>{ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash?[dash,dash]:[]);ctx.beginPath();ctx.moveTo(...project(...a));ctx.lineTo(...project(...b));ctx.stroke();ctx.setLineDash([]);};const gx0=midX-spanX/2-3000,gx1=midX+spanX/2+3000,gz0=midZ-spanZ/2-3000,gz1=midZ+spanZ/2+3000,step=Math.max(1000,Math.round((gx1-gx0)/10/500)*500);for(let x=gx0;x<=gx1;x+=step)line([x,-length,gz0],[x,-length,gz1],'#28454f',.6);for(let z=gz0;z<=gz1;z+=step)line([gx0,-length,z],[gx1,-length,z],'#28454f',.6);/* Colour and line weight follow the release state, not the geometry state.
    Solid is a claim that passed every gate; dashed amber is calculated but
    held; red is blocked. Drawing them alike lets the picture say "done"
    while the schedule says "waiting". */
@@ -959,10 +1066,59 @@ const RELEASE_STYLE={released:{c:'#7ccbb1',w:1.2,dash:0},review:{c:'#e8c17c',w:1
         for(const y of [0,-L]){for(let i=0;i<4;i++){const a=corners[i],b=corners[(i+1)%4];line([a[0],y,a[1]],[b[0],y,b[1]],color,style.w,style.dash);}}
         for(const c of corners)line([c[0],0,c[1]],[c[0],-L,c[1]],color+'80',.75,style.dash);
       }
-      const pos=project(x,500,z);ctx.font='10px ui-monospace,monospace';ctx.fillStyle='#bed5d8';ctx.textAlign='center';ctx.fillText(((state.data.elements[0]?.element_type||'e')[0].toUpperCase())+(idx+1),...pos);});ctx.textAlign='left';ctx.fillStyle='#d3e8e4';ctx.font='12px sans-serif';ctx.fillText(((state.data.elements[0]?.element_type||'element').replaceAll('_',' ')+' envelopes / spatial completeness').toUpperCase(),20,28);ctx.font='10px sans-serif';ctx.fillStyle='#8aafb6';ctx.fillText(`${elements.length} placements · ${(length/1000).toFixed(2)} m maximum length · ${(state.scene?.nodes||[]).some(n=>(n.placements||[]).some(p=>p.schematic))?'schematic placement — source states a count, not coordinates':state.data.seeded?'sample geometry':'source-derived geometry'}`,20,48);ctx.fillText('Wireframe lines describe concrete envelopes, not individual reinforcing bars.',20,h-18);
-    const legend=[['released','#7ccbb1','released'],['review','#e8c17c','calculated, held'],['blocked','#e8897f','blocked']];
-    legend.forEach(([k,c,label],i)=>{const lx=20+i*150,ly=h-38;ctx.strokeStyle=c;ctx.lineWidth=2;ctx.setLineDash(k==='released'?[]:[5,4]);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(lx+18,ly);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#9db6bd';ctx.font='10px sans-serif';ctx.fillText(label,lx+24,ly+3);});if(!elements.length){ctx.fillStyle='#d3e8e4';ctx.fillText('No supported placements available for this drawing.',25,h/2);}}canvas.onpointerdown=e=>{drag=true;lastX=e.clientX;canvas.setPointerCapture(e.pointerId);};canvas.onpointermove=e=>{if(drag){yaw+=(e.clientX-lastX)*.008;lastX=e.clientX;paint();}};canvas.onpointerup=()=>drag=false;canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(.5,Math.min(2.5,zoom-e.deltaY*.001));paint();};const ro=new ResizeObserver(()=>paint());ro.observe(canvas);setTimeout(()=>{if(!canvas.isConnected)ro.disconnect();},1000);paint();}catch(e){toast('Spatial view unavailable: '+e.message);}}
+      if(compact)return;const pos=project(x,500,z);ctx.font='10px ui-monospace,monospace';ctx.fillStyle='#bed5d8';ctx.textAlign='center';ctx.fillText(((state.data.elements[0]?.element_type||'e')[0].toUpperCase())+(idx+1),...pos);});ctx.textAlign='left';if(!compact){ctx.fillStyle='#d3e8e4';ctx.font='12px sans-serif';ctx.fillText(((state.data.elements[0]?.element_type||'element').replaceAll('_',' ')+' envelopes / spatial completeness').toUpperCase(),20,28);ctx.font='10px sans-serif';ctx.fillStyle='#8aafb6';ctx.fillText(`${elements.length} placements · ${(length/1000).toFixed(2)} m maximum length · ${(state.scene?.nodes||[]).some(n=>(n.placements||[]).some(p=>p.schematic))?'schematic placement — source states a count, not coordinates':state.data.seeded?'sample geometry':'source-derived geometry'}`,20,48);ctx.fillText('Wireframe lines describe concrete envelopes, not individual reinforcing bars.',20,h-18);}
+    const legend=compact?[]:[['released','#7ccbb1','released'],['review','#e8c17c','calculated, held'],['blocked','#e8897f','blocked']];
+    legend.forEach(([k,c,label],i)=>{const lx=20+i*150,ly=h-38;ctx.strokeStyle=c;ctx.lineWidth=2;ctx.setLineDash(k==='released'?[]:[5,4]);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(lx+18,ly);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#9db6bd';ctx.font='10px sans-serif';ctx.fillText(label,lx+24,ly+3);});if(!elements.length){ctx.fillStyle='#d3e8e4';ctx.font=(compact?'11':'12')+'px sans-serif';ctx.fillText(compact?'No placements to show yet.':'No supported placements available for this drawing.',compact?16:25,h/2);}}if(!compact){canvas.onpointerdown=e=>{drag=true;lastX=e.clientX;canvas.setPointerCapture(e.pointerId);};canvas.onpointermove=e=>{if(drag){yaw+=(e.clientX-lastX)*.008;lastX=e.clientX;paint();}};canvas.onpointerup=()=>drag=false;canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(.5,Math.min(2.5,zoom-e.deltaY*.001));paint();};}else{/* a preview on a scrolling page must never swallow the wheel */canvas.style.pointerEvents='none';yaw=.42;}const ro=new ResizeObserver(()=>paint());ro.observe(canvas);setTimeout(()=>{if(!canvas.isConnected)ro.disconnect();},1000);paint();}catch(e){if(compact){const host=canvas.closest('.preview-3d');if(host)host.dataset.failed='1';}else{toast('Spatial view unavailable: '+e.message);}}}
 $('#reset').onclick=newRun;$('#project-switch').onclick=openProjects;$('#profile').onclick=signOut;$('#ask-open').onclick=openAsk;
+/* NOTIFY-101. The count is refreshed whenever run data is, so the bell
+   cannot disagree with the screen beside it. Every row states its own
+   delivery: nothing here was emailed, and the panel says so once rather
+   than implying otherwise by omission. */
+async function refreshAlerts(){
+  if(!state.runId||state.data?.recorded){$('#alert-count').hidden=true;return;}
+  try{
+    const d=await api(`/runs/${state.runId}/notifications`);
+    state.alerts=d;
+    const c=$('#alert-count');
+    c.hidden=!d.unread; c.textContent=d.unread;
+    if(!$('#alerts-panel').hidden)paintAlerts();
+  }catch(e){$('#alert-count').hidden=true;}
+}
+function paintAlerts(){
+  const d=state.alerts;
+  const rows=(d?.alerts||[]).map(a=>`
+    <div class="alert-row ${a.read?'is-read':''}">
+      <span class="alert-dot ${a.severity==='ready'?'ok':'act'}"></span>
+      <div>
+        <b>${esc(a.title)}</b>
+        <p>${esc(a.body)}</p>
+        <div class="alert-meta">
+          <span>${esc(a.raised_at.replace('T',' ').replace('+00:00',' UTC'))}</span>
+          ${a.actionable_by_you?`<button class="quiet" onclick="openAlert('${a.id}','${a.goto}')">Open ${esc(a.goto)} →</button>`
+            :`<span class="muted">Your role cannot act on this</span>`}
+        </div>
+      </div>
+    </div>`).join('');
+  $('#alerts-panel').innerHTML=`<div class="bell-head">Alerts${d?.alerts?.length?` · ${d.alerts.length}`:''}</div>
+    ${rows||'<div class="bell-empty">Nothing needs attention on this run.</div>'}
+    <div class="bell-foot">${esc(d?.transport?.note||'')}</div>`;
+}
+async function openAlert(id,goto){
+  try{await api(`/runs/${state.runId}/notifications/${id}/read`,{method:'POST'});}catch(e){}
+  $('#alerts-panel').hidden=true;$('#alerts-open').setAttribute('aria-expanded','false');
+  await refreshAlerts();
+  if(goto&&goto!=='null')go(goto);
+}
+$('#alerts-open').onclick=async()=>{
+  const p=$('#alerts-panel'),open=p.hidden;
+  if(open){await refreshAlerts();paintAlerts();}
+  p.hidden=!open;$('#alerts-open').setAttribute('aria-expanded',String(open));
+};
+document.addEventListener('click',e=>{
+  const p=$('#alerts-panel');
+  if(!p||p.hidden)return;
+  if(!p.contains(e.target)&&!$('#alerts-open').contains(e.target)){p.hidden=true;$('#alerts-open').setAttribute('aria-expanded','false');}
+});
 document.addEventListener('keydown',e=>{
   if(e.key==='/'&&!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName||'')&&!STAGE.hidden===false){e.preventDefault();openAsk();}
 });$('#capabilities-button').onclick=()=>go('capabilities');$('#present').onclick=()=>{document.body.classList.toggle('presentation');$('#present').querySelector('span').textContent=document.body.classList.contains('presentation')?'Exit present':'Present';};$('#walkthrough').onclick=playWalkthrough;$('#print-summary').onclick=()=>{go('results');setTimeout(()=>window.print(),150);};$('#modal').addEventListener('click',e=>{if(e.target===$('#modal'))$('#modal').close();});

@@ -25,6 +25,7 @@ here, not a gap.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from ..evidence.fabric import claim_subject
@@ -241,9 +242,11 @@ EXAMPLES = [{"intent": name, "question": example} for name, example, _, _ in INT
 def answer(question: str, ctx: Any, run: Any,
            payload: dict[str, Any]) -> dict[str, Any]:
     q = (question or "").strip()
+    action = proposed_action(q, ctx, run)
     if not q:
         return {"text": "Ask about this project.", "rows": [], "citations": [],
-                "goto": None, "grounded": True, "examples": EXAMPLES}
+                "goto": None, "grounded": True, "examples": EXAMPLES,
+                "proposed_action": None}
     for name, _example, pattern, handler in INTENTS:
         if pattern.search(q):
             try:
@@ -253,10 +256,11 @@ def answer(question: str, ctx: Any, run: Any,
                 return {"text": f"That query failed against this run: {exc}",
                         "rows": [], "citations": [], "goto": None,
                         "grounded": True, "examples": EXAMPLES,
-                        "intent": name}
+                        "intent": name, "proposed_action": action}
             body = result.as_dict()
             body["intent"] = name
             body["examples"] = EXAMPLES
+            body["proposed_action"] = action
             return body
     # No match. This is the honest branch and the reason the feature is safe.
     return {
@@ -265,5 +269,111 @@ def answer(question: str, ctx: Any, run: Any,
                  "controls. That question is not one of them, and this build "
                  "has no model configured, so I will not guess at it."),
         "rows": [], "citations": [], "goto": None, "grounded": True,
-        "intent": None, "examples": EXAMPLES,
+        "intent": None, "examples": EXAMPLES, "proposed_action": action,
     }
+
+
+# ── actions (spec v2 COP-102) ──────────────────────────────────────────────
+#
+# The spec asks the query bar to offer generate/release/approve actions that
+# "require policy + explicit confirmation". Both halves of that are load
+# bearing, and the second one is the harder to honour: a confirmation step
+# that a presenter clicks through without reading is theatre.
+#
+# So an action here is never executed by asking for it. Asking returns a
+# *proposal*: what would happen, which capability it needs, and what the
+# caller must send back to run it. The action then runs only on a second call
+# carrying explicit consent and a rationale, and only if the actor's role
+# permits it — checked on the server, where hiding a button cannot help.
+#
+# Release is deliberately not an action. Nothing in this product releases a
+# quantity by command: release is computed from the gate vector, and offering
+# a "release it" button would misrepresent how the engine works to the exact
+# audience most likely to believe it. Asking for one says so.
+
+@dataclass(frozen=True)
+class ActionSpec:
+    key: str
+    label: str
+    capability: str          # the Role attribute the actor must hold
+    effect: str              # what changes, in plain words
+    irreversible: bool
+
+
+ACTIONS: dict[str, ActionSpec] = {a.key: a for a in (
+    ActionSpec("approve_rulebook", "Sign the rulebook", "approve",
+               "Records your name against the assumption sheet. Quantities "
+               "whose other gates already pass become releasable, and the "
+               "signature is written into the evidence chain.",
+               irreversible=True),
+    ActionSpec("generate_pack", "Generate the output pack", "export",
+               "Builds the BBS and the evidence export from what has already "
+               "released. It changes no quantity and approves nothing.",
+               irreversible=False),
+)}
+
+
+def propose(key: str, ctx: Any, run: Any) -> dict[str, Any] | None:
+    """Describe an action without performing any part of it."""
+    spec = ACTIONS.get(key)
+    if spec is None:
+        return None
+    blocked_reason = None
+    if key == "approve_rulebook":
+        if ctx.rulebook.is_approved():
+            blocked_reason = (f"the rulebook is already signed by "
+                              f"{ctx.rulebook.approved_by}")
+        elif run.pending_step != 19:
+            blocked_reason = ("this run is not at the rulebook gate, so there "
+                              "is nothing to sign yet")
+    return {
+        "action": spec.key,
+        "label": spec.label,
+        "requires_capability": spec.capability,
+        "effect": spec.effect,
+        "irreversible": spec.irreversible,
+        "available": blocked_reason is None,
+        "unavailable_reason": blocked_reason,
+        # the caller must echo these back; a bare POST does nothing
+        "confirmation_required": {
+            "confirm": True,
+            "rationale": "a sentence saying why, recorded against your name",
+        },
+    }
+
+
+ACTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("approve_rulebook",
+     re.compile(r"\b(approve|sign|sign[- ]?off)\b.*\b(rulebook|assumption)|"
+                r"\b(rulebook|assumption)\b.*\b(approve|sign)", re.I)),
+    ("generate_pack",
+     re.compile(r"\b(generate|build|produce|export|download)\b.*"
+                r"\b(pack|bbs|schedule|report|xlsx|pdf)", re.I)),
+]
+
+RELEASE_REQUEST = re.compile(r"\b(release|issue|approve)\b.*\b(bar|steel|"
+                             r"quantit|line|schedule)|^\s*release\b", re.I)
+
+
+def proposed_action(question: str, ctx: Any, run: Any) -> dict[str, Any] | None:
+    """If the question asks for something to be done, describe it."""
+    q = (question or "").strip()
+    if not q:
+        return None
+    for key, pattern in ACTION_PATTERNS:
+        if pattern.search(q):
+            return propose(key, ctx, run)
+    if RELEASE_REQUEST.search(q):
+        return {
+            "action": None,
+            "label": "Release is not a command",
+            "available": False,
+            "unavailable_reason": (
+                "Nothing here releases a quantity because someone asked for "
+                "it. Release is computed from the gate vector — source, rule, "
+                "approval, conflict, tolerance — and a line releases the "
+                "moment its gates pass. What a person can do is answer a "
+                "missing fact or sign the rulebook; both are offered as their "
+                "own actions."),
+        }
+    return None
