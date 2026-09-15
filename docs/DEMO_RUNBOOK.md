@@ -26,7 +26,9 @@ Run these in order. Every one is a hard gate except where marked.
 | 8 | Tests | `pytest -q` | all pass |
 | 9 | Reference match | `python scripts/demo_pipeline.py "$CORPUS"` | Atlantic **5,991.4 kg**, 2/2 lines |
 | 10 | Second family | `python scripts/demo_footing.py "$CORPUS"` | Kingston **325.6 kg**, exact |
-| 11 | Browser | open `$URL` | workspace loads, no console errors |
+| 11 | Browser | open `$URL` | sign-in screen loads, no console errors |
+| 12 | Roles | `curl -s -X POST $URL/runs/<id>/clarifications -H 'x-trustsight-user: commercial@demo-client.com' …` | **403** — a Viewer is refused by the API, not by a hidden button |
+| 13 | Ask | ask it something ungroundable in the UI | it declines rather than guessing |
 
 `mode: cloud` is a stop. It routes runs to Step Functions, where several
 Lambda handlers still raise `NotImplementedError`. Unset `STATE_MACHINE_ARN`
@@ -49,8 +51,16 @@ Also do, by hand:
 
 Times are cumulative. The numbers in brackets are what should be on screen.
 
-### 0:00 — Frame it (1 min)
-No slides. Open the workspace on **Overview**.
+### 0:00 — Sign in and frame it (1 min)
+No slides. Start at the **sign-in screen** and pick **Priya Raman (Client
+Admin)**.
+
+> "This is a demonstration sign-in — it says so on screen, and no password is
+> checked. What is real is the role: in a moment you'll see the API refuse a
+> release to someone whose role cannot make one."
+
+Land on **Projects**, open the corpus project, and the workspace opens on
+**Overview**.
 
 > "The goal is the same as your estimator's: take these drawings and produce
 > a bar bending schedule you can issue. The difference is that every number
@@ -70,10 +80,21 @@ releases. This is the structured route.
 > "When the drawing is complete, nothing is asked and nothing is assumed."
 
 ### 3:00 — The real case (3 min)
-New run → the corpus project **Project 5 - Atlanic Cages**. Enter **45**
-as the estimator's manual baseline when prompted.
+Projects → **Project 5 - Atlanic Cages**.
 
-Go to **Drawing intelligence**. The source PDF is on the left. Click two
+First **Auto assessment**. The route and the plain-language reason for it,
+the playbook that matched, and the steps this route deliberately skips —
+each with the reason.
+
+> "It read the set before any agent ran, and chose the path the input
+> actually supports. The steps it skipped say why. And the third route, for
+> scans, it refuses outright — we'd rather show you a boundary than a broken
+> run."
+
+Then **Agent flow** while it works: the 23 steps, live, with the cost of
+each.
+
+Then **Drawing intelligence**. The source PDF is on the left. Click two
 facts on the right and read the *why this matters* text aloud.
 
 Open **Review & approve**. The run asks five questions, one at a time, each
@@ -136,6 +157,15 @@ which the extraction path never reads.
 Be careful with the saving figure. If review time in the room was thirty
 seconds, say so — the honest claim is *machine time plus measured review*,
 on one project.
+
+### 12:30 — Ask TrustSight (30 sec)
+Press **/** anywhere. Ask *"what is blocked and why?"* then ask something it
+cannot ground — *"what will steel prices do next year"*.
+
+> "It answers from this project's graph, evidence chain and rulebook, with
+> the records it used. No model is configured, and when it cannot ground an
+> answer it declines. A query bar that guesses an engineering fact would undo
+> everything else you've seen."
 
 ### 13:00 — Spatial and downloads (1 min)
 **Drawing intelligence → 3D view**: released steel is solid, held steel is

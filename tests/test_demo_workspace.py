@@ -7,7 +7,10 @@ from trustsight.api import main
 
 @pytest.fixture
 def client():
-    return TestClient(main.app)
+    # Every write path now records an actor (spec v2 s2). These tests
+    # exercise engineering behaviour, so they act as the role that is
+    # allowed to; the role rules themselves are tested in test_roles.py.
+    return TestClient(main.app, headers={'x-trustsight-user': 'priya.raman@demo-client.com'})
 
 def start(client, scenario="clarification"):
     response = client.post('/runs', json={'project_id': 'atlantic-demo', 'scenario': scenario})

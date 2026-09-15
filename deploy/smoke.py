@@ -15,6 +15,10 @@ BASE = (sys.argv[1] if len(sys.argv) > 1 else "").rstrip("/")
 if not BASE:
     sys.exit("usage: python3 smoke.py https://<your-app-runner-url>")
 
+#: Every write now records who acted (spec v2 s2). Operator scripts run
+#: as the admin demo user; the role rules are tested in test_roles.py.
+ACTOR = "priya.raman@demo-client.com"
+
 FAILURES = []
 def check(label, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {label}{('  — ' + detail) if detail else ''}")
@@ -23,9 +27,10 @@ def check(label, ok, detail=""):
 
 def req(path, body=None, raw=False):
     data = json.dumps(body).encode() if body is not None else None
-    r = urllib.request.Request(
-        BASE + path, data=data,
-        headers={"Content-Type": "application/json"} if data else {})
+    headers = {"x-trustsight-user": ACTOR}
+    if data:
+        headers["Content-Type"] = "application/json"
+    r = urllib.request.Request(BASE + path, data=data, headers=headers)
     with urllib.request.urlopen(r, timeout=60) as resp:
         payload = resp.read()
         return payload if raw else json.loads(payload)
@@ -163,6 +168,62 @@ try:
             check("recorded run refuses writes", e.code == 409, f"HTTP {e.code}")
 except Exception as e:
     check("/fallback", False, str(e))
+
+# 8 ── the product shell, and the claims it must not make ────────────────────
+print("\nproduct shell")
+check("sign-in screen is in the bundle", "function signIn" in js)
+check("projects screen is in the bundle", "function openProjects" in js)
+check("create project screen is in the bundle", "function newProject" in js)
+check("document intake is in the bundle", "function openDocuments" in js)
+check("assessment screen is in the nav", "'assess','Auto assessment'" in js)
+check("agent flow screen is in the nav", "'flow','Agent flow'" in js)
+try:
+    sess = req("/session/users")
+    check("sign-in does not claim to authenticate",
+          sess.get("authentication") == "demonstration")
+    check("no credential field is ever served",
+          not any("password" in k for u in sess["users"] for k in u))
+    check("roles are published", len(sess.get("roles", [])) >= 4)
+except Exception as e:
+    check("/session/users", False, str(e))
+
+# A role model the UI merely draws is a diagram. This is the check that it is
+# a control: the API refuses, with the button out of the picture entirely.
+try:
+    viewer = urllib.request.Request(
+        BASE + f"/runs/{rid}/clarifications",
+        data=json.dumps({"field_name": "run_length_mm", "value": 12250,
+                         "element_type": "pile", "role": "spiral",
+                         "approver": "Viewer", "rationale": "x"}).encode(),
+        headers={"Content-Type": "application/json",
+                 "x-trustsight-user": "commercial@demo-client.com"})
+    urllib.request.urlopen(viewer, timeout=30)
+    check("a viewer cannot write through the API", False, "the write succeeded")
+except urllib.error.HTTPError as e:
+    check("a viewer cannot write through the API", e.code == 403, f"HTTP {e.code}")
+
+try:
+    ch = {c["key"]: c["status"] for c in req("/api/channels")}
+    check("intake channels state what is real",
+          ch.get("web_upload") == "live" and ch.get("s3") == "roadmap",
+          f"web_upload={ch.get('web_upload')} s3={ch.get('s3')}")
+except Exception as e:
+    check("/api/channels", False, str(e))
+
+# 9 ── Ask TrustSight answers from the run, or declines ──────────────────────
+print("\nask trustsight")
+try:
+    ex = req("/ask/examples")
+    check("no model is claimed", ex.get("model_configured") is False)
+    grounded = req(f"/runs/{rid}/ask", {"question": "what has released?"})
+    check("a grounded question is answered", grounded.get("intent") == "released",
+          grounded.get("text", "")[:60])
+    declined = req(f"/runs/{rid}/ask",
+                   {"question": "what will steel prices do next year"})
+    check("an ungroundable question is declined, not guessed",
+          declined.get("intent") is None and "will not guess" in declined.get("text", ""))
+except Exception as e:
+    check("ask", False, str(e))
 
 # ── verdict ─────────────────────────────────────────────────────────────────
 print()

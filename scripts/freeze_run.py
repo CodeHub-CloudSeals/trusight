@@ -28,6 +28,10 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+#: Every write now records who acted (spec v2 s2). Operator scripts run
+#: as the admin demo user; the role rules are tested in test_roles.py.
+ACTOR = "priya.raman@demo-client.com"
+
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STORE = ROOT / "data" / "fallback"
 
@@ -65,9 +69,10 @@ ANSWERS = [
 def call(base: str, path: str, body: dict | None = None, raw: bool = False):
     url = f"{base}{path}"
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        url, data=data,
-        headers={"Content-Type": "application/json"} if data else {})
+    headers = {"x-trustsight-user": ACTOR}
+    if data:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=120) as r:
         payload = r.read()
     return payload if raw else json.loads(payload)

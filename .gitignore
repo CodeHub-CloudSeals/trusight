@@ -18,3 +18,7 @@ data/corpus/*
 # has somewhere to copy from when an operator has deliberately frozen one.
 data/fallback/*
 !data/fallback/.keep
+
+# Transfer tarballs used to move a delta onto this machine. The mount does
+# not allow deletes, so they are ignored rather than left to be committed.
+_*.tar.gz

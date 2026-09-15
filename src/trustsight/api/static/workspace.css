@@ -12,6 +12,23 @@
 
 /* 1 ── TOKENS ============================================================== */
 
+/* The CloudSeals palette from spec v2 s4, with one correction.
+   ---------------------------------------------------------------------------
+   The spec names Azure #168BFF, Cyan #16B4D8, Teal #14A89A, Green #149B5F,
+   Amber #E59A13 and Red #D94B4B, and in the same paragraph requires that
+   "text contrast and accessibility must remain strong". Measured against the
+   #F3F8FC background those six hues land between 2.19:1 and 3.88:1 — every
+   one of them fails WCAG AA for body text, and white on them fails for
+   buttons. Taken literally the palette cannot satisfy its own rule.
+
+   So each hue is carried twice: the spec hex as the FILL (chips, bars, rules,
+   3D lines, status dots — graphics, where contrast is not the criterion) and
+   a darkened same-hue variant as the INK, used wherever the colour becomes
+   text or an icon stroke. Each ink value below is the lightest shade of that
+   hue that reaches 4.5:1; the number in the comment is the measured ratio.
+   The result is the spec's palette on screen and a page an estimator can
+   still read in a bright meeting room. */
+
 :root {
   color-scheme: light;
 
@@ -30,106 +47,122 @@
 
   /* Radius & elevation */
   --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-xl: 20px;
-  --e-1: 0 1px 2px rgba(16, 27, 46, .06), 0 1px 3px rgba(16, 27, 46, .04);
-  --e-2: 0 4px 12px -2px rgba(16, 27, 46, .10), 0 2px 4px rgba(16, 27, 46, .04);
-  --e-3: 0 18px 48px -12px rgba(16, 27, 46, .28);
+  --e-1: 0 1px 2px rgba(10, 42, 94, .05), 0 1px 3px rgba(10, 42, 94, .04);
+  --e-2: 0 4px 14px -2px rgba(10, 42, 94, .10), 0 2px 4px rgba(10, 42, 94, .04);
+  --e-3: 0 18px 48px -12px rgba(10, 42, 94, .26);
 
-  /* Surfaces */
-  --canvas: #f5f7fa;
-  --surface: #ffffff;
-  --surface-2: #f8fafc;
-  --surface-3: #eef2f7;
-  --line: #e2e8f0;
-  --line-strong: #cbd5e1;
+  /* Glass surfaces — white at 82-92% over the blue-grey canvas (spec s4) */
+  --canvas: #f3f8fc;
+  --surface: rgba(255, 255, 255, .88);
+  --surface-2: rgba(255, 255, 255, .62);
+  --surface-3: rgba(232, 241, 249, .78);
+  --surface-solid: #ffffff;
+  --glass-blur: saturate(160%) blur(14px);
+  /* the light edge that makes a translucent card read as glass and not as
+     a washed-out box */
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, .85);
+  --line: rgba(10, 42, 94, .11);
+  --line-strong: rgba(10, 42, 94, .22);
 
-  /* Text — all AA or better on --surface */
-  --ink: #0f1c31;
-  --ink-2: #35455e;
-  --muted: #5a6b84;
-  --faint: #7c8aa0;
+  /* Text — Navy for headings, Ink for body (spec s4) */
+  --navy: #0a2a5e;            /* 13.05:1 on canvas */
+  --ink: #17233b;             /* 14.66:1 */
+  --ink-2: #33415c;
+  --muted: #55647f;
+  --faint: #76859c;
 
-  /* Navigation shell */
-  --nav: #0c1a30;
-  --nav-2: #142743;
-  --nav-hover: #17294a;
-  --nav-active: #1c3a6b;
-  --nav-ink: #c3d2e6;
-  --nav-ink-strong: #eef4fd;
-  --nav-ink-faint: #8399b6;
-  --nav-line: #22385c;
+  /* Navigation shell — navy */
+  --nav: #0a2a5e;
+  --nav-2: #0d3370;
+  --nav-hover: #123f86;
+  --nav-active: #123f86;      /* selected row fill; azure marks it as an edge */
+  --nav-ink: #bdd3ef;
+  --nav-ink-strong: #f0f6ff;
+  --nav-ink-faint: #8aa6cc;
+  --nav-line: rgba(255, 255, 255, .12);
 
-  /* Semantic accents — role names, not colour names */
-  --accent: #1e4fd8;
-  --accent-hover: #1a44ba;
-  --accent-soft: #eaf0fe;
-  --accent-ink: #1a44ba;
+  /* Semantic accents — role names, not colour names.
+     <role>      spec fill, for graphics
+     <role>-ink  darkened, for text and icon strokes (ratio in comment)
+     <role>-on   background for a filled button carrying white text */
+  --accent: #168bff;          /* Azure — primary action */
+  --accent-ink: #006ad4;      /* 4.61:1 on --accent-soft, where it is used */
+  --accent-on: #0073e6;       /* white on this: 4.57:1 */
+  --accent-hover: #0062c4;
+  --accent-soft: #e6f2ff;
 
-  --ok: #0f7b5f;
-  --ok-soft: #e6f5ef;
-  --ok-ink: #0b6249;
+  --agent: #16b4d8;           /* Cyan — agent flow, spatial intelligence */
+  --agent-ink: #0e778f;       /* 4.64:1 on --agent-soft */
+  --agent-soft: #e2f6fb;
 
-  --attn: #9a6400;
-  --attn-soft: #fdf3e0;
-  --attn-ink: #7d5100;
+  --gov: #14a89a;             /* Teal — governance, trusted states */
+  --gov-ink: #0e796e;         /* 4.66:1 on --gov-soft */
+  --gov-soft: #e1f5f2;
 
-  --stop: #b3261e;
-  --stop-soft: #fdeceb;
-  --stop-ink: #92201a;
+  --ok: #149b5f;              /* Green — released */
+  --ok-ink: #107c4d;          /* 4.62:1 on --ok-soft */
+  --ok-soft: #e3f5eb;
 
-  --future: #6d3fc4;
-  --future-soft: #f2ecfd;
-  --future-ink: #5a32a6;
+  --attn: #e59a13;            /* Amber — review required */
+  --attn-ink: #95640d;        /* 4.65:1 on --attn-soft */
+  --attn-soft: #fdf3e2;
 
-  --focus: #1e4fd8;
+  --stop: #d94b4b;            /* Red — blocked / conflict */
+  --stop-ink: #bd2f2f;        /* 5.33:1 */
+  --stop-soft: #fdecec;
+
+  /* Roadmap / not built yet. Deliberately colourless: a seventh hue would
+     make "not implemented" compete with the six states that carry meaning. */
+  --future: #64748b;
+  --future-ink: #47566e;
+  --future-soft: #eef2f7;
+
+  --focus: #168bff;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --canvas: #0a1320;
-  --surface: #101c2e;
-  --surface-2: #15243a;
-  --surface-3: #1b2c45;
-  --line: #24374f;
-  --line-strong: #33496a;
+  --canvas: #08111f;
+  --surface: rgba(20, 35, 58, .78);
+  --surface-2: rgba(18, 31, 52, .55);
+  --surface-3: rgba(27, 46, 74, .72);
+  --surface-solid: #101c2e;
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, .06);
+  --line: rgba(150, 190, 240, .16);
+  --line-strong: rgba(150, 190, 240, .30);
 
-  --ink: #eaf1fb;
-  --ink-2: #c2d1e5;
-  --muted: #94a7c2;
-  --faint: #7b8ea9;
+  --navy: #cfe2ff;
+  --ink: #e9f1fb;
+  --ink-2: #c0d0e6;
+  --muted: #93a6c2;
+  --faint: #7a8da9;
 
-  --nav: #08111d;
-  --nav-2: #0f1d31;
-  --nav-hover: #16273f;
-  --nav-active: #1c3a6b;
-  --nav-line: #1d2f4a;
+  --nav: #061225;
+  --nav-2: #0a1c38;
+  --nav-hover: #123059;
+  --nav-active: #123059;
+  --nav-ink: #b6cbe8;
+  --nav-ink-strong: #f0f6ff;
+  --nav-ink-faint: #7e97ba;
+  --nav-line: rgba(255, 255, 255, .10);
 
-  --accent: #6d95ff;
-  --accent-hover: #86a8ff;
-  --accent-soft: #16264a;
-  --accent-ink: #a8c1ff;
+  /* On #08111f every spec hue already clears 4.5:1 except red, which is
+     lifted just enough. Dark mode needs no separate ink scale. */
+  --accent: #168bff;  --accent-ink: #5aa9ff;  --accent-on: #0073e6;
+  --accent-hover: #3d9dff; --accent-soft: rgba(22, 139, 255, .14);
+  --agent: #16b4d8;   --agent-ink: #4fcde9;   --agent-soft: rgba(22, 180, 216, .14);
+  --gov: #14a89a;     --gov-ink: #3fc8ba;     --gov-soft: rgba(20, 168, 154, .14);
+  --ok: #149b5f;      --ok-ink: #3fc98a;      --ok-soft: rgba(20, 155, 95, .16);
+  --attn: #e59a13;    --attn-ink: #f0bc5c;    --attn-soft: rgba(229, 154, 19, .16);
+  --stop: #da5050;    --stop-ink: #f08a8a;    --stop-soft: rgba(217, 75, 75, .18);
+  --future: #7c8ba4;  --future-ink: #9fb0c9;  --future-soft: rgba(124, 139, 164, .16);
 
-  --ok: #4bcfa4;
-  --ok-soft: #10322a;
-  --ok-ink: #7fe0c0;
+  --focus: #5aa9ff;
 
-  --attn: #e3a542;
-  --attn-soft: #33260f;
-  --attn-ink: #f0c27c;
-
-  --stop: #ff7d73;
-  --stop-soft: #331916;
-  --stop-ink: #ffa79f;
-
-  --future: #a985ff;
-  --future-soft: #241a3d;
-  --future-ink: #c6adff;
-
-  --focus: #6d95ff;
-
-  --e-1: 0 1px 2px rgba(0, 0, 0, .4);
-  --e-2: 0 4px 14px -2px rgba(0, 0, 0, .5);
-  --e-3: 0 18px 48px -12px rgba(0, 0, 0, .7);
+  --e-1: 0 1px 2px rgba(0, 0, 0, .45);
+  --e-2: 0 6px 18px -4px rgba(0, 0, 0, .55);
+  --e-3: 0 22px 54px -14px rgba(0, 0, 0, .7);
 }
 
 /* 2 ── RESET & BASE ======================================================== */
@@ -142,6 +175,43 @@ body {
   color: var(--ink);
   font: var(--t-body) / 1.55 var(--font);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Glass needs something behind it or it is just a pale box. Two very wide,
+   very faint washes — navy top-left, cyan bottom-right — give the translucent
+   cards something to pick up as they move over the page. Fixed, so scrolling
+   does not drag the gradient with the content, and low enough in alpha that a
+   bar schedule printed from this page still looks like a document. */
+body::before {
+  content: "";
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(1100px 620px at 8% -8%,  rgba(22, 139, 255, .10), transparent 62%),
+    radial-gradient(900px 560px at 104% 106%, rgba(22, 180, 216, .09), transparent 60%),
+    radial-gradient(700px 500px at 82% 12%,  rgba(20, 168, 154, .05), transparent 60%);
+}
+:root[data-theme="dark"] body::before {
+  background:
+    radial-gradient(1100px 620px at 8% -8%,  rgba(22, 139, 255, .16), transparent 62%),
+    radial-gradient(900px 560px at 104% 106%, rgba(22, 180, 216, .12), transparent 60%);
+}
+
+/* One rule turns every card in the app to glass, because every card already
+   draws itself from --surface. backdrop-filter is the expensive part, so it is
+   applied once here rather than per component, and only where a surface is
+   actually translucent. */
+.panel, .metric, .question-card, .drawer, .inspector, .cap-card,
+.scenario-option, .baseline-ask, .modal-body, .diagram, .hero, .glass {
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--e-1), var(--glass-edge);
+}
+
+/* Safari and Firefox without backdrop-filter fall back to a solid card rather
+   than an unreadable transparent one. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --surface: #ffffff; --surface-2: #f6f9fc; --surface-3: #e8f1f9; }
+  :root[data-theme="dark"] { --surface: #142338; --surface-2: #121f34; --surface-3: #1b2e4a; }
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -207,6 +277,9 @@ small { display: block; color: var(--muted); font-size: var(--t-tiny); margin-to
 .brand-icon { display: inline-flex; width: 30px; height: 30px; }
 .brand-icon img { width: 100%; height: 100%; object-fit: contain; }
 .brand-dot { font-size: var(--t-micro); align-self: flex-start; margin-top: var(--s-1); color: var(--nav-ink-faint); }
+/* On the shell screens the same mark sits on glass, where the rail's
+   faint blue is a 2.48:1 grey. */
+.stage-bar .brand-dot { color: var(--muted); }
 
 .workspace-label {
   font-size: var(--t-micro);
@@ -233,10 +306,11 @@ small { display: block; color: var(--muted); font-size: var(--t-tiny); margin-to
   place-items: center;
   width: 30px; height: 30px;
   border-radius: var(--r-sm);
-  background: var(--nav-active);
-  color: var(--nav-ink-strong);
+  background: linear-gradient(140deg, var(--accent) 0%, var(--agent) 100%);
+  color: #fff;
   font-size: var(--t-micro);
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: .04em;
   flex-shrink: 0;
 }
 
@@ -267,6 +341,7 @@ nav button.active { background: var(--nav-active); color: var(--nav-ink-strong);
 nav button.active::before {
   content: ""; position: absolute; left: 0; top: 20%; bottom: 20%;
   width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
+  box-shadow: 0 0 10px rgba(22, 139, 255, .65);
 }
 :root[data-theme="dark"] nav button.active::before { background: var(--accent); }
 nav svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -275,7 +350,9 @@ nav .count {
   border-radius: 999px;
   padding: 1px var(--s-2);
   background: var(--attn);
-  color: #fff;
+  /* not #fff: white on #E59A13 is 2.34:1. Navy on amber is 6.9:1 and this
+     badge is the count of things waiting for a person. */
+  color: #0a2a5e;
   font-size: var(--t-micro);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -309,7 +386,7 @@ nav .count {
   backdrop-filter: blur(10px);
   font-size: var(--t-small);
 }
-.slash { margin: 0 var(--s-2); color: var(--line-strong); }
+.slash { margin: 0 var(--s-2); color: var(--muted); }
 #breadcrumb { font-weight: 600; }
 .top-actions { display: flex; align-items: center; gap: var(--s-2); }
 
@@ -334,7 +411,7 @@ footer {
   display: flex; justify-content: space-between; align-items: center;
   padding: var(--s-4) var(--s-8);
   border-top: 1px solid var(--line);
-  color: var(--faint); font-size: var(--t-tiny);
+  color: var(--muted); font-size: var(--t-tiny);
   background: var(--surface);
 }
 
@@ -358,11 +435,13 @@ footer {
 
 .button {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--accent-on);
   border-radius: var(--r-sm);
   padding: var(--s-2) var(--s-4);
   min-height: 34px;
-  background: var(--accent); color: #fff;
+  /* --accent-on, not --accent: white on #168BFF is 3.40:1 and fails AA.
+     The fill keeps the azure identity at a shade that white can sit on. */
+  background: var(--accent-on); color: #fff;
   font-size: var(--t-small); font-weight: 600; white-space: nowrap;
   transition: background .12s ease, border-color .12s ease, box-shadow .12s ease;
   box-shadow: var(--e-1);
@@ -602,12 +681,15 @@ tr.clickable.selected { background: var(--accent-soft); box-shadow: inset 3px 0 
   padding: var(--s-1) var(--s-2); border: 1px solid rgb(255 255 255 / .18);
   border-radius: var(--r-sm); font-size: var(--t-micro);
 }
+.hero-image { display: flex; flex-direction: column; }
+.hero-headline { position: relative; z-index: 1; }
 .hero-stats {
   position: relative; z-index: 1;
   display: flex; flex-direction: column; justify-content: center;
-  gap: var(--s-3); padding: var(--s-6);
-  height: 100%;
+  gap: var(--s-3); padding: var(--s-5) var(--s-6);
+  flex: 1;
 }
+.hero-stat b { color: #dce7f8; }
 .hero-stat { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); }
 .hero-stat span { font-size: var(--t-tiny); color: #9db2d1; letter-spacing: .06em; text-transform: uppercase; }
 .hero-stat b { font-size: var(--t-xl); font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
@@ -635,8 +717,9 @@ tr.clickable.selected { background: var(--accent-soft); box-shadow: inset 3px 0 
   display: grid; place-items: center; flex-shrink: 0;
   width: 26px; height: 26px; border-radius: var(--r-sm);
   background: var(--attn-soft); color: var(--attn-ink);
-  font-size: var(--t-small); font-weight: 700;
+  font-size: var(--t-small); font-weight: 800;
 }
+
 .scenario b { font-size: var(--t-base); font-weight: 600; }
 .scenario p { color: var(--muted); font-size: var(--t-small); margin: var(--s-1) 0 var(--s-2); }
 .scenario .quiet { padding: 0; color: var(--accent-ink); font-weight: 600; }
@@ -653,7 +736,7 @@ tr.clickable.selected { background: var(--accent-soft); box-shadow: inset 3px 0 
   font-size: var(--t-micro); font-weight: 700;
 }
 .flow-stage.done .num { background: var(--ok-soft); color: var(--ok-ink); }
-.flow-stage.current .num { background: var(--accent); color: #fff; }
+.flow-stage.current .num { background: var(--accent-on); color: #fff; }
 .flow-stage.current { color: var(--ink); font-weight: 650; }
 .flow-arrow { color: var(--line-strong); flex: 1; height: 1px; background: var(--line); font-size: 0; }
 
@@ -932,10 +1015,22 @@ dialog::backdrop { background: rgb(8 17 29 / .5); backdrop-filter: blur(2px); }
   .app { margin-left: 0; }
   .topbar { height: auto; min-height: 56px; padding: var(--s-3) var(--s-4); flex-wrap: wrap; gap: var(--s-2); }
   .topbar > div:first-child { display: none; }
-  .top-actions { width: 100%; justify-content: space-between; }
+  /* Six controls on one unbreakable row pushed "New run" 73px past the
+     right edge. They wrap now, and the labels drop so the row still fits. */
+  .top-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; gap: var(--s-2); }
+  .top-actions .quiet span { display: none; }
+  .top-actions .button { margin-left: auto; }
   main { padding: var(--s-5) var(--s-4) var(--s-10); }
-  .page-head { flex-wrap: wrap; align-items: flex-start; }
+  /* The head action used to sit on one unbreakable row with the title and
+     push 73px off the right edge at phone width. flex-shrink on the toolbar
+     is not enough — the buttons inside carry nowrap — so the whole head
+     wraps and the toolbar takes the full line under it. */
+  .page-head { flex-wrap: wrap; align-items: flex-start; gap: var(--s-4); }
   .page-head h1 { font-size: var(--t-2xl); }
+  .page-head .toolbar { flex-wrap: wrap; flex-shrink: 1; width: 100%; }
+  .page-head .toolbar > * { flex: 1 1 auto; min-width: 0; }
+  .stage-head { gap: var(--s-4); }
+  .ask-open { display: none; }
   .metrics, .cap-grid { grid-template-columns: 1fr; }
   .input-grid { grid-template-columns: 1fr; }
   .hero-copy { padding: var(--s-5); }
@@ -960,4 +1055,430 @@ dialog::backdrop { background: rgb(8 17 29 / .5); backdrop-filter: blur(2px); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* 8 ── PRODUCT SHELL ======================================================= */
+/* Sign-in, projects, project creation and document intake. These take the
+   whole viewport; the workspace shell is hidden behind them rather than
+   resized, so nothing in the engineering screens has to know they exist. */
+
+body.stage-open .sidebar, body.stage-open .app { display: none; }
+#stage { min-height: 100vh; }
+
+.stage-page { min-height: 100vh; display: flex; flex-direction: column; }
+.stage-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-8);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  position: sticky; top: 0; z-index: 5;
+}
+.stage-bar .brand { color: var(--navy); font-size: var(--t-lg); }
+.stage-bar-right { display: flex; align-items: center; gap: var(--s-3); }
+.stage-user {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--surface-2);
+  text-align: left;
+}
+.stage-user:hover { border-color: var(--accent); }
+.stage-user b { display: block; font-size: var(--t-small); font-weight: 600; }
+.stage-user small { color: var(--muted); font-size: var(--t-micro); }
+
+.stage-main { flex: 1; width: min(1180px, 100%); margin: 0 auto; padding: var(--s-10) var(--s-8) var(--s-16); }
+.stage-center { min-height: 100vh; display: grid; place-items: center; padding: var(--s-8); }
+.stage-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: var(--s-6); flex-wrap: wrap; margin-bottom: var(--s-8);
+}
+.stage-head h1 { font-size: var(--t-3xl); color: var(--navy); letter-spacing: -.02em; margin: var(--s-2) 0 var(--s-2); }
+.stage-head p { color: var(--muted); font-size: var(--t-base); max-width: 62ch; }
+.stage-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s-4); flex-wrap: wrap; margin-top: var(--s-5);
+}
+
+/* Sign in ------------------------------------------------------------------ */
+.signin { min-height: 100vh; display: grid; grid-template-columns: 1.05fr 1fr; }
+.signin-brief {
+  background: linear-gradient(155deg, var(--nav) 0%, #06214d 55%, #0a3a72 100%);
+  color: #e8f1ff;
+  padding: var(--s-16) var(--s-12);
+  display: flex; flex-direction: column; justify-content: center;
+  position: relative; overflow: hidden;
+}
+.signin-brief::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(620px 420px at 88% 8%, rgba(22, 180, 216, .30), transparent 62%),
+    radial-gradient(520px 380px at 4% 96%, rgba(22, 139, 255, .28), transparent 60%);
+}
+.signin-brief > * { position: relative; }
+.signin-brand { display: flex; align-items: center; gap: var(--s-2); font-size: var(--t-xl); font-weight: 600; }
+.signin-brand img { width: 30px; height: 30px; }
+.signin-brand span { font-size: var(--t-micro); opacity: .7; }
+.signin-brief h1 {
+  font-size: clamp(26px, 3.2vw, 40px); line-height: 1.18;
+  margin: var(--s-10) 0 var(--s-5); letter-spacing: -.025em; color: #fff;
+}
+.signin-brief > p { color: #b9d2f2; font-size: var(--t-lg); line-height: 1.6; max-width: 46ch; }
+.signin-points { list-style: none; margin: var(--s-10) 0 0; padding: 0; display: grid; gap: var(--s-4); }
+.signin-points li { display: flex; align-items: flex-start; gap: var(--s-3); color: #d7e6fa; font-size: var(--t-base); }
+.signin-points i {
+  flex-shrink: 0; margin-top: 5px; width: 8px; height: 8px; border-radius: 99px;
+  background: var(--agent); box-shadow: 0 0 0 4px rgba(22, 180, 216, .22);
+}
+.signin-tenant { margin-top: var(--s-12); font-size: var(--t-micro); letter-spacing: .14em; text-transform: uppercase; color: #7fa3d0; }
+.signin-tenant b { color: #cfe2ff; }
+
+.signin-panel { display: grid; place-items: center; padding: var(--s-10) var(--s-8); }
+.signin-card { width: min(520px, 100%); }
+.signin-card h2 { font-size: var(--t-2xl); color: var(--navy); margin: var(--s-2) 0 0; letter-spacing: -.02em; }
+
+.user-list { display: grid; gap: var(--s-2); }
+.user-row {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+  gap: var(--s-3) var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface-2); text-align: left;
+  transition: border-color .12s ease, background .12s ease, transform .12s ease;
+}
+.user-row:hover { border-color: var(--accent); background: var(--accent-soft); transform: translateX(2px); }
+.user-row .avatar { width: 34px; height: 34px; border-radius: var(--r-sm); }
+.user-meta b { display: block; font-size: var(--t-base); font-weight: 600; }
+.user-meta small { color: var(--muted); font-size: var(--t-micro); }
+.user-role { font-size: var(--t-tiny); font-weight: 600; color: var(--accent-ink); white-space: nowrap; }
+.user-caps { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: var(--s-1); }
+.user-caps i {
+  font-style: normal; font-size: var(--t-micro); letter-spacing: .05em;
+  text-transform: uppercase; color: var(--gov-ink);
+  background: var(--gov-soft); border-radius: 99px; padding: 2px var(--s-2);
+}
+.user-caps i.none { color: var(--muted); background: var(--surface-3); }
+.button.full { width: 100%; }
+
+/* Projects ----------------------------------------------------------------- */
+.project-grid {
+  display: grid; gap: var(--s-4);
+  grid-template-columns: repeat(auto-fill, minmax(288px, 1fr));
+}
+.project-card {
+  display: flex; flex-direction: column; gap: var(--s-3);
+  padding: var(--s-5);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--surface);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--e-1), var(--glass-edge);
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+}
+.project-card:hover { transform: translateY(-2px); box-shadow: var(--e-2), var(--glass-edge); border-color: var(--line-strong); }
+.project-card-top { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
+.project-mark {
+  display: grid; place-items: center; width: 38px; height: 38px;
+  border-radius: var(--r-md); font-size: var(--t-small); font-weight: 700;
+  color: #fff; letter-spacing: .04em;
+  background: linear-gradient(140deg, var(--accent) 0%, var(--agent) 100%);
+}
+.project-card h3 { font-size: var(--t-lg); color: var(--navy); letter-spacing: -.015em; }
+.project-facts { display: flex; gap: var(--s-5); margin: var(--s-1) 0 0; }
+.project-facts dt { font-size: var(--t-micro); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.project-facts dd { margin: 2px 0 0; font-size: var(--t-base); font-weight: 600; font-variant-numeric: tabular-nums; }
+.project-card-actions { display: flex; align-items: center; gap: var(--s-3); margin-top: auto; padding-top: var(--s-3); }
+
+/* Create project ----------------------------------------------------------- */
+.form-card { max-width: 780px; }
+.field .req { float: right; font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; }
+
+/* Documents ---------------------------------------------------------------- */
+.doc-layout { display: grid; grid-template-columns: 1.35fr .95fr; gap: var(--s-6); align-items: start; }
+.dropzone {
+  display: grid; place-items: center; gap: var(--s-2);
+  padding: var(--s-12) var(--s-6);
+  border: 1.5px dashed var(--line-strong); border-radius: var(--r-lg);
+  background: var(--surface-2); text-align: center;
+  transition: border-color .14s ease, background .14s ease;
+}
+.dropzone:hover, .dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone.over { border-style: solid; }
+.dropzone-art { color: var(--accent-ink); }
+.dropzone b { font-size: var(--t-lg); color: var(--navy); }
+.doc-list { display: flex; flex-direction: column; }
+.doc-row {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-5); border-bottom: 1px solid var(--line);
+}
+.doc-row:last-child { border-bottom: 0; }
+.doc-icon { color: var(--accent-ink); display: flex; }
+.doc-meta b { display: block; font-size: var(--t-base); font-weight: 600; }
+.doc-meta small { color: var(--muted); font-size: var(--t-micro); }
+.doc-hash { font-size: var(--t-micro); color: var(--muted); }
+.channel-list { display: grid; gap: var(--s-2); }
+.channel {
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.channel.live { border-left: 3px solid var(--ok); }
+.channel.roadmap { border-left: 3px solid var(--future); opacity: .82; }
+.channel-top { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin-bottom: 2px; }
+.channel-top b { font-size: var(--t-base); }
+
+@media (max-width: 1080px) {
+  .signin { grid-template-columns: 1fr; }
+  .signin-brief { padding: var(--s-10) var(--s-6); }
+  .doc-layout { grid-template-columns: 1fr; }
+  .stage-main { padding: var(--s-8) var(--s-5) var(--s-12); }
+  .stage-bar { padding: var(--s-3) var(--s-5); }
+}
+
+/* 9 ── ASSESSMENT, FLOW, ASK ============================================== */
+
+.ask-open {
+  display: flex; align-items: center; gap: var(--s-2);
+  margin-right: auto; margin-left: var(--s-6);
+  padding: var(--s-2) var(--s-3);
+  min-width: 230px;
+  border: 1px solid var(--line); border-radius: 99px;
+  background: var(--surface-2); color: var(--muted);
+  font-size: var(--t-small);
+  transition: border-color .12s ease, color .12s ease, background .12s ease;
+}
+.ask-open:hover { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
+.ask-open kbd {
+  margin-left: auto; font: 600 var(--t-micro)/1 var(--font-mono);
+  padding: 3px 6px; border-radius: 4px;
+  background: var(--surface-3); color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.ask-bar { display: flex; gap: var(--s-2); }
+.ask-bar input {
+  flex: 1; padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  background: var(--surface-solid); font-size: var(--t-base);
+}
+.ask-examples { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.chip {
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--line); border-radius: 99px;
+  background: var(--surface-2); color: var(--ink-2);
+  font-size: var(--t-small);
+  transition: border-color .12s ease, color .12s ease;
+}
+.chip:hover { border-color: var(--accent); color: var(--accent-ink); }
+.ask-answer { margin-top: var(--s-5); }
+.ask-q {
+  font-size: var(--t-micro); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--s-2);
+}
+.ask-text {
+  font-size: var(--t-lg); line-height: 1.6; color: var(--ink);
+  border-left: 3px solid var(--agent); padding-left: var(--s-4);
+}
+.ask-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin-top: var(--s-4); }
+
+.route-hero {
+  display: grid; grid-template-columns: 1.4fr .8fr; gap: var(--s-8);
+  align-items: start;
+}
+.route-hero h2 {
+  font-size: var(--t-3xl); color: var(--navy); letter-spacing: -.02em;
+  text-transform: capitalize; margin: var(--s-1) 0 var(--s-2);
+}
+.route-why { border-left: 3px solid var(--agent); padding-left: var(--s-4); margin-top: var(--s-4); }
+.route-why b { display: block; font-size: var(--t-micro); letter-spacing: .1em; text-transform: uppercase; color: var(--agent-ink); }
+.route-why p { color: var(--ink-2); font-size: var(--t-base); line-height: 1.65; margin-top: var(--s-1); }
+.route-side { display: grid; gap: var(--s-2); }
+.route-fact {
+  display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-3);
+  padding: var(--s-3); border-radius: var(--r-sm);
+  background: var(--surface-2); border: 1px solid var(--line);
+}
+.route-fact span { font-size: var(--t-micro); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.route-fact b { font-size: var(--t-small); text-align: right; }
+.skip-list { display: grid; gap: var(--s-3); }
+.skip b { font-size: var(--t-base); text-transform: capitalize; }
+.skip p { color: var(--muted); font-size: var(--t-small); line-height: 1.6; }
+.fact-line {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px var(--s-3);
+  padding: var(--s-2) 0; border-bottom: 1px solid var(--line);
+}
+.fact-line:last-child { border-bottom: 0; }
+.fact-line b { font-size: var(--t-small); }
+.fact-line span { font-size: var(--t-small); font-weight: 600; text-align: right; }
+.fact-line small { grid-column: 1 / -1; color: var(--muted); font-size: var(--t-micro); }
+
+.timeline { list-style: none; margin: 0; padding: 0; }
+.tl {
+  display: grid; grid-template-columns: auto 1fr auto auto;
+  align-items: center; gap: var(--s-3) var(--s-4);
+  padding: var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+}
+.tl:last-child { border-bottom: 0; }
+.tl-dot {
+  display: grid; place-items: center; width: 26px; height: 26px;
+  border-radius: 99px; font-size: var(--t-micro); font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: var(--surface-3); color: var(--muted);
+  border: 1px solid var(--line);
+}
+.tl.executed .tl-dot { background: var(--ok); color: #fff; border-color: transparent; }
+.tl.failed   .tl-dot { background: var(--stop); color: #fff; border-color: transparent; }
+.tl.waiting  .tl-dot { background: var(--attn); color: #fff; border-color: transparent; }
+.tl.not_implemented .tl-dot { border-color: var(--attn); color: var(--attn-ink); }
+.tl-body b { display: block; font-size: var(--t-base); text-transform: capitalize; }
+.tl-body small { color: var(--muted); font-size: var(--t-micro); }
+.tl-cost { font: var(--t-micro)/1 var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.tl.not_applicable { opacity: .62; }
+
+@media (max-width: 1080px) {
+  .route-hero { grid-template-columns: 1fr; }
+  .ask-open { min-width: 0; margin-left: var(--s-3); }
+  .ask-open span, .ask-open kbd { display: none; }
+  .tl { grid-template-columns: auto 1fr; }
+  .tl-cost { display: none; }
+}
+
+/* 10 ── PRESENCE =========================================================== */
+/* Spec v2 s4: "use motion to reveal agent progress and state transitions, but
+   keep engineering data, tables and evidence readable." So: motion is spent on
+   arrival and on state change, never on a number an estimator is reading. Every
+   duration here is under 420ms, and the reduced-motion rule at the end of the
+   sheet switches all of it off. */
+
+:root {
+  --ease-out: cubic-bezier(.16, .84, .44, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+}
+
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sweep { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes ping {
+  0%   { box-shadow: 0 0 0 0 rgba(22, 180, 216, .55); }
+  70%  { box-shadow: 0 0 0 9px rgba(22, 180, 216, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(22, 180, 216, 0); }
+}
+
+/* Cards arrive in reading order rather than all at once. The stagger is
+   capped at six: past that it stops reading as composition and starts
+   reading as lag. */
+.metrics > *, .project-grid > *, .cap-grid > * {
+  animation: rise .34s var(--ease-out) both;
+}
+.metrics > *:nth-child(2), .project-grid > *:nth-child(2), .cap-grid > *:nth-child(2) { animation-delay: .05s; }
+.metrics > *:nth-child(3), .project-grid > *:nth-child(3), .cap-grid > *:nth-child(3) { animation-delay: .10s; }
+.metrics > *:nth-child(4), .project-grid > *:nth-child(4), .cap-grid > *:nth-child(4) { animation-delay: .15s; }
+.project-grid > *:nth-child(5), .cap-grid > *:nth-child(5) { animation-delay: .20s; }
+.project-grid > *:nth-child(n+6), .cap-grid > *:nth-child(n+6) { animation-delay: .24s; }
+
+.hero { animation: rise .42s var(--ease-out) both; }
+.signin-brief > * { animation: rise .5s var(--ease-out) both; }
+.signin-brief h1 { animation-delay: .06s; }
+.signin-brief > p { animation-delay: .12s; }
+.signin-points { animation-delay: .18s; }
+.signin-tenant { animation-delay: .24s; }
+.signin-card { animation: rise .46s var(--ease-out) .1s both; }
+.user-row { animation: fade .4s var(--ease-out) both; }
+.user-row:nth-child(2) { animation-delay: .06s; }
+.user-row:nth-child(3) { animation-delay: .10s; }
+.user-row:nth-child(4) { animation-delay: .14s; }
+.user-row:nth-child(5) { animation-delay: .18s; }
+
+/* The released mass is the sentence the whole demo is building towards, so
+   it gets display treatment rather than a row in a stat rail. */
+.hero-headline {
+  padding: var(--s-6) var(--s-6) var(--s-5);
+  border-bottom: 1px solid var(--nav-line);
+}
+/* Direct child only: the number carries its own <span> for the count-up, and
+   an unscoped rule here styled it as the eyebrow — 44px display type rendered
+   as a 10px uppercase label. */
+.hero-headline > span {
+  display: block;
+  font-size: var(--t-micro); letter-spacing: .14em; text-transform: uppercase;
+  color: #8fb4ff;
+}
+.hero-headline b > span { font: inherit; letter-spacing: inherit; text-transform: none; color: inherit; }
+.hero-headline b {
+  display: block;
+  margin-top: var(--s-2);
+  font-size: clamp(30px, 3.4vw, 44px); font-weight: 650;
+  letter-spacing: -.035em; line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+.hero-headline b em {
+  font-style: normal; font-size: .42em; font-weight: 500;
+  letter-spacing: -.01em; color: #a8c4ea; margin-left: .25em;
+}
+.hero-headline small {
+  display: block; margin-top: var(--s-2);
+  font-size: var(--t-tiny); color: #9db2d1;
+}
+.hero-headline.is-released b { color: #7ee8b0; }
+
+/* A run still working shows it in the rail, once, quietly. */
+.hero-live {
+  display: inline-flex; align-items: center; gap: var(--s-2);
+  font-size: var(--t-micro); letter-spacing: .1em; text-transform: uppercase;
+  color: #8fd8ea;
+}
+.hero-live i {
+  width: 7px; height: 7px; border-radius: 99px; background: var(--agent);
+  animation: ping 1.6s var(--ease-in-out) infinite;
+}
+
+/* Timeline steps land as the run reaches them. */
+.tl { animation: rise .3s var(--ease-out) both; }
+.tl:nth-child(2) { animation-delay: .02s; }  .tl:nth-child(3) { animation-delay: .04s; }
+.tl:nth-child(4) { animation-delay: .06s; }  .tl:nth-child(5) { animation-delay: .08s; }
+.tl:nth-child(6) { animation-delay: .10s; }  .tl:nth-child(7) { animation-delay: .12s; }
+.tl:nth-child(n+8) { animation-delay: .14s; }
+.tl.is-active { background: var(--agent-soft); }
+.tl.is-active .tl-dot { background: var(--agent); color: #fff; border-color: transparent; animation: ping 1.4s var(--ease-in-out) infinite; }
+
+/* Loading reads as the product, not as a stalled page. */
+.skeleton {
+  border-radius: var(--r-sm);
+  background: linear-gradient(100deg, var(--surface-3) 30%, var(--surface-2) 50%, var(--surface-3) 70%);
+  background-size: 200% 100%;
+  animation: sweep 1.4s linear infinite;
+}
+.loading-brand {
+  display: grid; place-items: center; gap: var(--s-4);
+  padding: var(--s-16) var(--s-6); text-align: center;
+}
+.loading-brand .ring {
+  width: 44px; height: 44px; border-radius: 99px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+.loading-brand b { font-size: var(--t-lg); color: var(--navy); font-weight: 600; letter-spacing: -.01em; }
+.loading-brand small { color: var(--muted); font-size: var(--t-small); max-width: 42ch; }
+
+/* Hover intent on things that open something. */
+.project-card, .metric, .scenario-option, .user-row, .chip {
+  transition: transform .16s var(--ease-out), box-shadow .16s var(--ease-out),
+              border-color .16s var(--ease-out), background .16s var(--ease-out);
+}
+.tl, .doc-row, .channel { transition: background .16s var(--ease-out); }
+.tl:hover, .doc-row:hover { background: var(--surface-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .metrics > *, .project-grid > *, .cap-grid > *, .hero, .signin-brief > *,
+  .signin-card, .user-row, .tl, .skeleton, .hero-live i, .loading-brand .ring {
+    animation: none !important;
+  }
+}
+.project-note {
+  margin-top: var(--s-2); padding-top: var(--s-3);
+  border-top: 1px dashed var(--line);
+  font-size: var(--t-micro); line-height: 1.55;
 }

@@ -81,7 +81,7 @@ def test_a_mistyped_bend_type_is_rejected_not_run():
 
     from trustsight.api.main import app
 
-    client = TestClient(app)
+    client = TestClient(app, headers={'x-trustsight-user': 'priya.raman@demo-client.com'})
     run_id = client.post("/runs", json={"project_id": "atlantic-demo"}).json()["run_id"]
     for bad in (12250, "ZZZ9", "", None, ["2"]):
         r = client.post(f"/runs/{run_id}/clarifications", json={

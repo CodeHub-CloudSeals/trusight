@@ -2,9 +2,9 @@
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = (v,d=0) => Number(v||0).toLocaleString('en-GB',{maximumFractionDigits:d,minimumFractionDigits:d});
-const state = {tab:'overview', runId:null, data:null, view:'drawing', selected:'count', page:1, pages:1, selectedItem:0, scene:null};
-const icons = {overview:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',drawings:'<path d="M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h5"/>',review:'<path d="M8 4h12v16H4V8M8 3v5H3M8 14l3 3 6-7"/>',results:'<path d="M4 4h16v16H4zM4 9h16M10 4v16M4 15h16"/>',value:'<path d="M4 19V9M10 19V5M16 19v-6M22 19H2"/>',evidence:'<path d="M12 2l8 4v6c0 5-8 10-8 10S4 17 4 12V6zM8 11l3 3 5-6"/>',capabilities:'<path d="M12 2l2 7 7 3-7 2-2 8-2-8-8-2 8-3z"/>'};
-const navs = [['overview','Overview'],['drawings','Drawing intelligence'],['review','Review & approve'],['results','Bar schedule'],['value','Value & accuracy'],['evidence','Evidence & workflow'],['capabilities','AI capabilities']];
+const state = {stage:null, user:null, project:null, projects:[], tab:'overview', runId:null, data:null, view:'drawing', selected:'count', page:1, pages:1, selectedItem:0, scene:null};
+const icons = {assess:'<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/>',flow:'<path d="M5 6h5M5 12h9M5 18h5M17 4v4M17 16v4"/><circle cx="17" cy="12" r="2.5"/>',overview:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',drawings:'<path d="M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h5"/>',review:'<path d="M8 4h12v16H4V8M8 3v5H3M8 14l3 3 6-7"/>',results:'<path d="M4 4h16v16H4zM4 9h16M10 4v16M4 15h16"/>',value:'<path d="M4 19V9M10 19V5M16 19v-6M22 19H2"/>',evidence:'<path d="M12 2l8 4v6c0 5-8 10-8 10S4 17 4 12V6zM8 11l3 3 5-6"/>',capabilities:'<path d="M12 2l2 7 7 3-7 2-2 8-2-8-8-2 8-3z"/>'};
+const navs = [['overview','Overview'],['assess','Auto assessment'],['flow','Agent flow'],['drawings','Drawing intelligence'],['review','Review & approve'],['results','Bar schedule'],['value','Value & accuracy'],['evidence','Evidence & workflow'],['capabilities','AI capabilities']];
 /* Inline icon set. One visual language — no emoji, which render differently on
    every machine a demo might run on. */
 const ui = {
@@ -22,8 +22,18 @@ const ui = {
   shield:'<path d="M12 2l8 4v6c0 5-8 10-8 10S4 17 4 12V6zM8 11l3 3 5-6"/>',
 };
 const ic = (name, size = 14) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ui[name]}</svg>`;
-async function api(path,options){const r=await fetch(path,options);if(!r.ok){let m;try{m=(await r.json()).detail;}catch{m=r.statusText;}throw Error(typeof m==='string'?m:JSON.stringify(m));}return r.json();}
+/* Every request names who is acting. The server enforces the role; this only
+   tells it who to enforce against. */
+function authHeaders(extra){return Object.assign({'x-trustsight-user':state.user?.email||''},extra||{});}
+async function api(path,options){
+  options=options||{};options.headers=authHeaders(options.headers);
+  const r=await fetch(path,options);
+  if(!r.ok){let m;try{m=(await r.json()).detail;}catch{m=r.statusText;}
+    if(r.status===401){signOut();}
+    throw Error(typeof m==='string'?m:JSON.stringify(m));}
+  return r.json();}
 const post = (path,body)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+const esch = s => String(s??'').replace(/"/g,'&quot;');
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(state.toastTimer);state.toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),4500);}
 function tag(text,color=''){return `<span class="tag ${color}">${esc(text)}</span>`;}
 function button(text,action,style=''){return `<button class="button ${style}" onclick="${action}">${text}</button>`;}
@@ -46,8 +56,8 @@ async function refreshWhenSettled(tries=40){
   }
 }
 function go(tab){state.tab=tab;updateNav();render();window.scrollTo({top:0,behavior:'instant'});const m=$('#main');m.classList.remove('fade-in');void m.offsetWidth;m.classList.add('fade-in');}
-function render(){if(!state.data)return;({overview,drawings,review,results,value,evidence,capabilities}[state.tab])();}
-async function start(scenario='clarification',project_id='atlantic-demo'){ const baseline=Number($('#start-baseline')?.value)||null;$('#modal').close();$('#main').innerHTML='<div class="loading"><span class="spinner"></span>Reading inputs and checking the evidence…</div>';try{let r=await post('/runs',{project_id,scenario,manual_baseline_minutes:baseline,requested_outputs:['bbs_pdf','bbs_xlsx','evidence_pdf','spatial_view']});state.runId=r.run_id;localStorage.setItem('trustsight-run',r.run_id);state.scene=null;state.page=1;state.selectedItem=0;await refreshWhenSettled();state.pages=(await api(`/runs/${state.runId}/document`)).pages;go('overview');toast(scenario==='conflict'?'Conflict scenario ready. No bars can be released.':scenario==='structured'?'Structured run ready. Every fact was known; nothing needs clarification.':scenario==='approval'?'Calculation complete. Awaiting an engineer’s rulebook sign-off before release.':'Run ready. Review the drawing and resolve the missing details.');}catch(e){$('#main').innerHTML=`<div class="empty"><strong>Could not start the run</strong>${esc(e.message)}<p>${button('Try again',"start()")}</p></div>`;}}
+function render(){if(!state.data)return;({overview,assess,flow,drawings,review,results,value,evidence,capabilities}[state.tab])();}
+async function start(scenario='clarification',project_id='atlantic-demo',baselineArg=null){ const baseline=baselineArg??(Number($('#start-baseline')?.value)||null);$('#modal').close();$('#main').innerHTML=`<div class="loading-brand"><div class="ring"></div><b>Reading the drawing set</b><small>Preflight is classifying each sheet, selecting a playbook and choosing the execution route. Nothing is assumed along the way.</small></div>`;try{let r=await post('/runs',{project_id,scenario,manual_baseline_minutes:baseline,requested_outputs:['bbs_pdf','bbs_xlsx','evidence_pdf','spatial_view']});state.runId=r.run_id;localStorage.setItem('trustsight-run',r.run_id);state.scene=null;state.page=1;state.selectedItem=0;await refreshWhenSettled();state.pages=(await api(`/runs/${state.runId}/document`)).pages;go('overview');toast(scenario==='conflict'?'Conflict scenario ready. No bars can be released.':scenario==='structured'?'Structured run ready. Every fact was known; nothing needs clarification.':scenario==='approval'?'Calculation complete. Awaiting an engineer’s rulebook sign-off before release.':'Run ready. Review the drawing and resolve the missing details.');}catch(e){$('#main').innerHTML=`<div class="empty"><strong>Could not start the run</strong>${esc(e.message)}<p>${button('Try again',"start()")}</p></div>`;}}
 function newRun(){ $('#modal-body').innerHTML=`<div class="modal-head"><h2>Choose your demonstration</h2><button class="quiet" onclick="$('#modal').close()" aria-label="Close">${ic('close',16)}</button></div><div class="modal-content"><p>Each scenario runs the calculation and governance engine end to end.</p><button class="scenario-option" onclick="start('clarification')"><strong>01 / From missing detail to released schedule →</strong><span>Inspect a pile, approve two sample clarifications, then trace the calculated result.</span></button><button class="scenario-option" onclick="start('conflict')"><strong>02 / Catch a conflicting pile count →</strong><span>The plan says 8. The schedule says 6. Watch the engine block release.</span></button><button class="scenario-option" onclick="start('structured')"><strong>03 / Everything known: instant release →</strong><span>A complete native-text drawing needs no clarification. Watch the schedule release immediately.</span></button><button class="scenario-option" onclick="start('approval')"><strong>04 / Block release until an engineer signs off →</strong><span>Every fact is known and calculated, but the rulebook itself still needs a human approval before anything releases.</span></button><div class="baseline-ask"><label class="field">Estimator's current time for this scope (minutes, optional)</label><input id="start-baseline" type="number" min="1" max="10000" step="1" placeholder="e.g. 45"><small>Used to measure time saved. Leave it blank and no saving is claimed — the value screen reports measured time only.</small></div><div class="notice">New run preserves previous runs in this server session. Server restarts clear local runs.</div><div id="corpus-projects"></div><div id="recorded-runs"></div></div>`;$('#modal').showModal();loadCorpusProjects();loadRecorded();}
 /* Real projects from the corpus, with their coverage stated rather than implied.
    A project no playbook can read is listed and disabled — hiding it would make
@@ -98,6 +108,310 @@ async function openRecorded(runId){
     toast('Recorded run loaded. Read-only — nothing recalculates.');
   }catch(e){$('#main').innerHTML=`<div class="empty"><strong>Could not load the recorded run</strong>${esc(e.message)}<p>${button('Start a live run',"newRun()")}</p></div>`;}
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   THE PRODUCT SHELL — spec v2 s2, s3, s6
+   ----------------------------------------------------------------------------
+   Everything before the engineering workspace. Four full-bleed stages that
+   run in order the first time and can be revisited from the sidebar:
+
+       signin → projects → create → documents → (workspace)
+
+   The sign-in stage is a user picker, not a credential form, and says so on
+   screen. A password box that accepts anything would teach a room of buyers
+   that TrustSight checks credentials when it does not, and this product is
+   sold on not claiming what it cannot show. The roles it hands out are real:
+   the API refuses the action, not just the button.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const STAGE = $('#stage');
+function showStage(html){
+  STAGE.innerHTML=html; STAGE.hidden=false;
+  document.body.classList.add('stage-open');
+  window.scrollTo({top:0,behavior:'instant'});
+  STAGE.classList.remove('fade-in'); void STAGE.offsetWidth; STAGE.classList.add('fade-in');
+}
+function hideStage(){STAGE.hidden=true;STAGE.innerHTML='';document.body.classList.remove('stage-open');}
+
+/* ── 1. Sign in ───────────────────────────────────────────────────────────── */
+async function signIn(){
+  state.stage='signin';
+  let d;
+  try{ d=await api('/session/users'); }
+  catch(e){ showStage(`<div class="stage-center"><div class="panel panel-pad"><h2>Cannot reach TrustSight</h2><p class="explanation mt">${esc(e.message)}</p></div></div>`); return; }
+  showStage(`
+  <div class="signin">
+    <section class="signin-brief">
+      <div class="signin-brand"><img src="/assets/logo.svg" alt=""><b>TrustSight</b><span>®</span></div>
+      <h1>Every number has a story.<br>Every story has evidence.</h1>
+      <p>Governed rebar estimation: AI reads the drawing, deterministic rules do the arithmetic, and nothing releases until a named person has approved whatever the drawing did not say.</p>
+      <ul class="signin-points">
+        <li><i></i>Unknown is never assumed — it becomes a question</li>
+        <li><i></i>Calculated is not the same as releasable</li>
+        <li><i></i>Every quantity traces to source, rule, and approver</li>
+      </ul>
+      <div class="signin-tenant">Tenant <b>${esc(d.tenant_id)}</b></div>
+    </section>
+    <section class="signin-panel">
+      <div class="panel panel-pad signin-card">
+        <div class="eyebrow">SIGN IN</div>
+        <h2>Choose your role for this session</h2>
+        <div class="notice amber mt">${esc(d.note)}</div>
+        <div class="user-list mt">
+          ${d.users.map(u=>`
+            <button class="user-row" onclick="chooseUser('${esch(u.email)}')">
+              <span class="avatar">${esc(initials(u.name))}</span>
+              <span class="user-meta"><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span>
+              <span class="user-role">${esc(u.role_label)}</span>
+              <span class="user-caps">${capChips(u.can)}</span>
+            </button>`).join('')}
+        </div>
+        <button class="button outline full mt" disabled title="Not in this build">
+          ${ic('shield',13)} Enterprise SSO
+        </button>
+        <p class="explanation mt" style="text-align:center">Roadmap: ${esc(d.roadmap)}</p>
+      </div>
+    </section>
+  </div>`);
+}
+const initials = n => String(n||'').split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
+function capChips(can){
+  const map=[['create_project','create'],['upload','upload'],['clarify','clarify'],['approve','approve']];
+  const on=map.filter(([k])=>can[k]).map(([,l])=>l);
+  return on.length?on.map(l=>`<i>${l}</i>`).join(''):'<i class="none">read only</i>';
+}
+async function chooseUser(email){
+  try{
+    const d=await api('/session/users');
+    state.user=d.users.find(u=>u.email===email);
+    localStorage.setItem('trustsight-user',email);
+    paintIdentity();
+    await openProjects();
+  }catch(e){toast(e.message);}
+}
+function signOut(){
+  state.user=null;state.project=null;
+  try{localStorage.removeItem('trustsight-user');localStorage.removeItem('trustsight-run');}catch{}
+  signIn();
+}
+function paintIdentity(){
+  if(!state.user)return;
+  $('#user-initials').textContent=initials(state.user.name);
+  $('#user-name').childNodes[0].nodeValue=state.user.name;
+  $('#user-role').textContent=state.user.role_label;
+}
+
+/* ── 2. Projects ──────────────────────────────────────────────────────────── */
+async function openProjects(){
+  state.stage='projects';
+  showStage(`<div class="stage-page"><div class="loading"><span class="spinner"></span>Loading projects…</div></div>`);
+  let list;
+  try{ list=await api('/api/projects'); }
+  catch(e){ showStage(stagePage('Projects',`<div class="empty"><strong>Could not load projects</strong>${esc(e.message)}</div>`)); return; }
+  state.projects=list;
+  const canCreate=state.user?.can?.create_project;
+  showStage(stagePage('Projects', `
+    <div class="stage-head">
+      <div>
+        <div class="eyebrow">${esc(state.user?.role_label||'')} · ${esc(state.user?.tenant_id||'')}</div>
+        <h1>Projects</h1>
+        <p>Every drawing, clarification, approval and output belongs to one project. Nothing crosses a tenant.</p>
+      </div>
+      ${canCreate?button(`${ic('plus',13)} Create project`,"newProject()"):
+        `<span class="tag">Your role cannot create projects</span>`}
+    </div>
+    <div class="project-grid">
+      ${list.map(projectCard).join('')}
+    </div>`));
+}
+function projectCard(p){
+  /* The chip and the primary action have to agree with what the project can
+     actually do. The seeded walkthrough carries no PDF and runs perfectly, so
+     "no drawings yet" was wrong; a project no playbook reads would open and
+     produce an empty schedule, so its Open is demoted and labelled. */
+  const runnable = p.seeded || (p.readable!==false && p.document_count>0);
+  const state_ = p.seeded ? ['Seeded walkthrough','green']
+    : p.readable===false ? ['No playbook reads this yet','amber']
+    : p.document_count===0 ? ['No drawings yet','']
+    : ['Ready to run','green'];
+  return `<article class="project-card">
+    <div class="project-card-top">
+      <span class="project-mark">${esc(initials(p.name))}</span>
+      ${tag(state_[0],state_[1])}
+    </div>
+    <h3>${esc(p.name)}</h3>
+    <p class="explanation">${esc([p.client,p.site].filter(Boolean).join(' · ')||(p.seeded?'Seeded walkthrough — no PDF corpus required':'No client or site recorded'))}</p>
+    <dl class="project-facts">
+      <div><dt>Documents</dt><dd>${p.document_count}</dd></div>
+      <div><dt>Playbook</dt><dd>${p.playbook?esc(p.playbook):'—'}</dd></div>
+      <div><dt>Baseline</dt><dd>${p.manual_baseline_minutes?p.manual_baseline_minutes+' min':'—'}</dd></div>
+    </dl>
+    <div class="project-card-actions">
+      ${runnable
+        ? button(`Open ${ic('arrowRight')}`,`openProject('${esch(p.project_id)}')`)
+        : p.document_count
+          ? button(`Open anyway ${ic('arrowRight')}`,`openProject('${esch(p.project_id)}')`,'outline')
+          : button(`Add drawings ${ic('arrowRight')}`,`openDocuments('${esch(p.project_id)}')`)}
+      ${p.seeded?'':`<button class="quiet" onclick="openDocuments('${esch(p.project_id)}')">Documents</button>`}
+    </div>
+    ${runnable||!p.document_count?'':'<p class="explanation project-note">This element family has no playbook in this build. Opening it shows the refusal, not a schedule.</p>'}
+  </article>`;
+}
+function stagePage(title,body){
+  return `<div class="stage-page">
+    <header class="stage-bar">
+      <a class="brand" href="/"><span class="brand-icon"><img src="/assets/logo.svg" alt=""></span>TrustSight<span class="brand-dot">®</span></a>
+      <div class="stage-bar-right">
+        <button class="quiet" onclick="toggleStageTheme()" title="Toggle colour theme"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke-linecap="round"/></svg></button>
+        ${state.user?`<button class="stage-user" onclick="signOut()" title="Switch demo user"><span class="avatar">${esc(initials(state.user.name))}</span><span><b>${esc(state.user.name)}</b><small>${esc(state.user.role_label)}</small></span></button>`:''}
+      </div>
+    </header>
+    <main class="stage-main">${body}</main>
+  </div>`;
+}
+function toggleStageTheme(){const now=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';setTheme(now);}
+
+/* ── 3. Create project ────────────────────────────────────────────────────── */
+function newProject(){
+  state.stage='create';
+  showStage(stagePage('Create project',`
+    <div class="stage-head">
+      <div><div class="eyebrow">STEP 1 OF 2</div><h1>Create a project</h1>
+      <p>Governance starts before the AI does. These fields decide which rulebook applies, who the estimator is, and what the ROI is measured against.</p></div>
+      <button class="quiet" onclick="openProjects()">${ic('chevL',13)} Back to projects</button>
+    </div>
+    <form class="panel panel-pad form-card" id="project-form" onsubmit="submitProject(event)">
+      <div class="input-grid">
+        <div class="full"><label class="field">Project name<span class="req">required</span></label>
+          <input name="name" required maxlength="80" placeholder="Atlantic Pile Foundation" autofocus></div>
+        <div><label class="field">Client</label><input name="client" maxlength="60" placeholder="Demo Steel Mill"></div>
+        <div><label class="field">Site</label><input name="site" maxlength="60" placeholder="Ontario"></div>
+        <div><label class="field">Standard pack</label>
+          <select name="standard">
+            <option>ACI / RebarCAD bend types</option>
+            <option>BS 8666 (not yet catalogued)</option>
+          </select></div>
+        <div><label class="field">Estimator</label><input name="estimator" maxlength="60" placeholder="Tom Keller"></div>
+        <div class="full"><label class="field">Estimator's current time for this scope (minutes)</label>
+          <input name="manual_baseline_minutes" type="number" min="1" max="10000" placeholder="e.g. 45">
+          <small class="explanation">Optional. Left blank, the value screen reports measured time and claims no saving — it will not invent a baseline.</small></div>
+      </div>
+      <div class="form-actions">
+        <span class="explanation">Created as ${esc(state.user?.name||'')} · ${esc(state.user?.tenant_id||'')}</span>
+        <button class="button" type="submit">Create and add drawings ${ic('arrowRight')}</button>
+      </div>
+      <div class="error" role="alert"></div>
+    </form>`));
+}
+async function submitProject(ev){
+  ev.preventDefault();
+  const f=ev.target, btn=f.querySelector('[type=submit]');
+  btn.disabled=true; f.querySelector('.error').textContent='';
+  try{
+    const mins=Number(f.elements.manual_baseline_minutes.value);
+    const p=await post('/api/projects',{
+      name:f.elements.name.value.trim(), client:f.elements.client.value.trim(),
+      site:f.elements.site.value.trim(), standard:f.elements.standard.value,
+      estimator:f.elements.estimator.value.trim(),
+      manual_baseline_minutes:mins>0?Math.round(mins):null});
+    toast(`Project "${p.name}" created.`);
+    await openDocuments(p.project_id);
+  }catch(e){f.querySelector('.error').textContent=e.message;btn.disabled=false;}
+}
+
+/* ── 4. Documents ─────────────────────────────────────────────────────────── */
+async function openDocuments(projectId){
+  state.stage='documents';
+  showStage(stagePage('Documents',`<div class="loading"><span class="spinner"></span>Loading project…</div>`));
+  let p,channels;
+  try{ [p,channels]=await Promise.all([api('/api/projects/'+encodeURIComponent(projectId)),api('/api/channels')]); }
+  catch(e){ showStage(stagePage('Documents',`<div class="empty"><strong>Could not open the project</strong>${esc(e.message)}</div>`)); return; }
+  state.project=p;
+  const canUpload=state.user?.can?.upload && !p.seeded && !p.documents.some(d=>d.channel==='corpus');
+  showStage(stagePage('Documents',`
+    <div class="stage-head">
+      <div><div class="eyebrow">STEP 2 OF 2 · ${esc(p.name)}</div><h1>Add drawings</h1>
+      <p>Whatever the channel, the original is hashed and stored immutable. The channel never decides how much the drawing is trusted.</p></div>
+      <button class="quiet" onclick="openProjects()">${ic('chevL',13)} Back to projects</button>
+    </div>
+    <div class="doc-layout">
+      <div>
+        ${canUpload?`
+        <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Add a PDF drawing">
+          <div class="dropzone-art">${ic('download',26)}</div>
+          <b>Drop a PDF drawing here</b>
+          <span class="explanation">or click to choose · native-text PDF under 25 MB · 1–100 pages</span>
+          <input id="doc-input" type="file" accept="application/pdf" multiple hidden onchange="uploadDocs(this.files)">
+        </div>`:`
+        <div class="notice">${p.seeded?'The seeded walkthrough carries its own illustrative drawing; there is nothing to upload.':
+          p.documents.some(d=>d.channel==='corpus')?'These drawings are mounted with the service and are read-only.':
+          'Your role cannot upload drawings on this project.'}</div>`}
+        <div class="panel mt">
+          <div class="panel-title"><span>Documents</span>${tag(p.document_count+' registered',p.document_count?'green':'')}</div>
+          ${p.documents.length?`<div class="doc-list">${p.documents.map(docRow).join('')}</div>`:
+            '<div class="empty"><strong>No drawings yet</strong>Add at least one before the assessment can run.</div>'}
+        </div>
+        <div class="stage-actions">
+          <span class="explanation">${p.document_count?'Preflight will classify each sheet and choose the execution route.':'Add a drawing to continue.'}</span>
+          <button class="button" ${p.document_count?'':'disabled'} onclick="openProject('${esch(p.project_id)}')">
+            Run auto assessment ${ic('arrowRight')}</button>
+        </div>
+      </div>
+      <div>
+        <div class="section-heading"><h2>Intake channels</h2><span class="muted" style="font-size:10px">WHAT THIS BUILD ACTUALLY DOES</span></div>
+        <div class="channel-list">
+          ${channels.map(c=>`<div class="channel ${c.status}">
+            <div class="channel-top"><b>${esc(c.name)}</b>${tag(c.status==='live'?'Live':'Roadmap',c.status==='live'?'green':'')}</div>
+            <p class="explanation">${esc(c.detail)}</p>
+          </div>`).join('')}
+        </div>
+        <div class="notice mt">Cards marked roadmap are not wired in this build. They are shown so the architecture is visible, not so the demo can imply them.</div>
+      </div>
+    </div>`));
+  if(canUpload)wireDropzone();
+}
+function docRow(d){
+  return `<div class="doc-row">
+    <span class="doc-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6zM14 3v5h4"/></svg></span>
+    <span class="doc-meta"><b>${esc(d.filename)}</b><small>${esc(d.channel.replace('_',' '))} · ${fmt(Math.round(d.bytes/1024))} KB · ${esc(d.uploaded_by)}</small></span>
+    <span class="doc-hash mono" title="SHA-256 of the original">${esc((d.sha256||'—').slice(0,12))}</span>
+  </div>`;
+}
+function wireDropzone(){
+  const z=$('#dropzone'); if(!z)return;
+  z.onclick=()=>$('#doc-input').click();
+  z.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('#doc-input').click();}};
+  ['dragenter','dragover'].forEach(n=>z.addEventListener(n,e=>{e.preventDefault();z.classList.add('over');}));
+  ['dragleave','drop'].forEach(n=>z.addEventListener(n,e=>{e.preventDefault();z.classList.remove('over');}));
+  z.addEventListener('drop',e=>uploadDocs(e.dataTransfer.files));
+}
+async function uploadDocs(files){
+  if(!files||!files.length)return;
+  const id=state.project.project_id;
+  for(const f of files){
+    toast(`Uploading ${f.name}…`);
+    try{
+      await api('/api/projects/'+encodeURIComponent(id)+'/documents',
+        {method:'POST',headers:{'Content-Type':'application/pdf','x-filename':f.name},body:f});
+    }catch(e){toast(e.message);}
+  }
+  await openDocuments(id);
+}
+
+/* ── Into the workspace ───────────────────────────────────────────────────── */
+async function openProject(projectId){
+  try{ state.project=await api('/api/projects/'+encodeURIComponent(projectId)); }catch{}
+  hideStage();
+  paintProject();
+  await start('clarification',projectId,state.project?.manual_baseline_minutes||null);
+}
+function paintProject(){
+  const p=state.project; if(!p)return;
+  $('#project-initials').textContent=initials(p.name);
+  $('#project-name').childNodes[0].nodeValue=p.name;
+  $('#project-sub').textContent=[p.client,p.site].filter(Boolean).join(' · ')||p.tenant_id;
+}
+
 /* The overview is the first thing a buyer sees. It must answer one question:
    "where is this job right now, and why is the number what it is?" */
 function overviewStages(){const d=state.data,items=d.schedule.items||[],conflict=d.elements.some(e=>e.conflicts.length);const released=items.filter(i=>i.release==='released').length;const open=d.questions.length;const done=['done','','',''];
@@ -112,12 +426,20 @@ const headline=conflict?'Two sources disagree. Nothing releases.':open?`${open} 
 const subline=conflict?'The plan and the schedule give different pile counts. The engine preserved the conflict instead of picking a side, and blocked release for the whole element.':open?'The drawing does not state a cutting-length basis or a spiral run length. Rather than assume a value, the engine stopped and asked — and held the estimate back until an engineer answers.':released.length?`${fmt(d.released_mass_kg,1)} kg of reinforcement released, each line carrying its source, its rule version and the person who approved it.`:'The arithmetic is complete. The rulebook itself still needs an engineer’s sign-off before a single kilogram is released.';
 $('#main').innerHTML=head(headline,subline,button(`Open drawing ${ic('arrowUpRight')}`,"go('drawings')",'outline'))+`
 <div class="hero"><div class="hero-copy"><div class="eyebrow">RUN STATUS · ${esc(status.toUpperCase())}</div><h2>${released.length?'Released, and defensible.':conflict?'Release blocked at the element.':'Held until the evidence supports it.'}</h2><p>${open?'An estimate built on a guess is a commercial risk. TrustSight surfaces every unstated fact as a specific question, records who answered it and why, and only then lets the number out.':'Every quantity below was produced by deterministic engineering rules from approved facts — not by a model’s best guess.'}</p><div class="hero-actions">${button(`${open?`Answer ${open} question${open===1?'':'s'}`:'Review decisions'} ${ic('arrowRight')}`,"go('review')")}${button('Inspect the drawing',"go('drawings')",'outline')}</div></div>
-<div class="hero-image"><div class="hero-stats"><div class="hero-stat"><span>Released mass</span><b>${fmt(d.released_mass_kg,1)} kg</b></div><div class="hero-divider"></div><div class="hero-stat"><span>Held back</span><b>${fmt(d.review_mass_kg,1)} kg</b></div><div class="hero-divider"></div><div class="hero-stat"><span>Open questions</span><b>${open}</b></div><div class="hero-divider"></div><div class="hero-stat"><span>Evidence records</span><b>${d.evidence.records.length}</b></div></div></div></div>
+<div class="hero-image">
+  <div class="hero-headline${released.length?' is-released':''}">
+    <span>${released.length?'Released mass':'Released so far'}</span>
+    <b><span data-count="${d.released_mass_kg}">${fmt(d.released_mass_kg,1)}</span><em>kg</em></b>
+    <small>${released.length?`across ${released.length} schedule line${released.length===1?'':'s'}, each with an approver`:'nothing releases until the evidence supports it'}</small>
+    ${['running','pending'].includes(d.run?.state)?'<small class="hero-live mt"><i></i>run in progress</small>':''}
+  </div>
+  <div class="hero-stats"><div class="hero-stat"><span>Held back</span><b>${fmt(d.review_mass_kg,1)} kg</b></div><div class="hero-divider"></div><div class="hero-stat"><span>Open questions</span><b>${open}</b></div><div class="hero-divider"></div><div class="hero-stat"><span>Evidence records</span><b>${d.evidence.records.length}</b></div></div>
+</div></div>
 <div class="panel flow-strip">${[['Read the drawing'],['Resolve the gaps'],['Calculate the steel'],['Trace every number']].map(([s],i)=>{const st=overviewStages()[i];return `<div class="flow-stage ${st}"><span class="num">${st==='done'?ic('check',12):'0'+(i+1)}</span>${s}</div>${i<3?'<span class="flow-arrow"></span>':''}`;}).join('')}</div>
-<div class="metrics mt">${metric('ELEMENT INSTANCES',fmt(d.elements.reduce((s,e)=>s+e.instances,0)),conflict?'Conflicting source count':d.seeded?'Pile P1 · sample schedule':'Read from source drawing')}${metric('RELEASED MASS',fmt(d.released_mass_kg,1)+' <em>kg</em>',released.length?'Passed every release condition':'Nothing released yet — by design')}${metric('OPEN CLARIFICATIONS',open,conflict?'Plus an element-wide conflict':'Missing facts, never guessed',open?'amber':'')}${metric('EVIDENCE RECORDS',d.evidence.records.length,'Hash chain integrity checked','green')}</div>
-<div class="grid-two"><div><div class="section-heading"><h2>Active project</h2>${tag('Session live','green')}</div><div class="panel"><div class="project-row"><div class="project-art">${miniDrawing()}</div><div class="project-info"><b>${d.seeded?'Atlantic Cages · Pile P1':esc(d.run.project_id)}</b><small>${d.seeded?'Sample schematic / S101 + S103':esc(d.document)}</small><div class="project-meta">${tag(d.seeded?'Sample inputs':'Source PDF')}${tag(status,conflict?'red':d.questions.length?'amber':'green')}</div></div>${button(`Open ${ic('arrowRight')}`,"go('drawings')",'outline small')}</div><div class="panel-pad" style="padding-top:0"><div class="progress-line"><i style="width:${conflict?0:released.length/2*100}%"></i></div><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted)"><span>${released.length} released BBS lines</span><span>${d.questions.length} questions awaiting review</span></div></div></div>${d.seeded?'':'<div class="notice mt">Real PDF intake uses the pile playbook. Scanned drawings and other element families may remain unresolved. The project rulebook requires approval.</div>'}</div>
-<div><div class="section-heading"><h2>Put trust to the test</h2><span class="muted" style="font-size:10px">DEMO SCENARIOS</span></div><div class="panel panel-pad"><div class="scenario"><span class="scenario-icon">?</span><div><b>A detail is missing. What happens?</b><p>Approve a leg dimension and see the bar schedule update.</p><button class="quiet" onclick="go('review')">Explore clarification →</button></div></div><div class="scenario"><span class="scenario-icon" style="background:var(--stop-soft);color:var(--stop)">≠</span><div><b>Two sources disagree.</b><p>Preserve the conflict and prevent an unsupported release.</p><button class="quiet" onclick="start('conflict')">Run conflict scenario →</button></div></div></div></div></div>
-<div class="section-space section-heading"><div><h2>Bring your own drawing</h2><p>Native-text pile PDF · up to 25 MB · other drawing families require a new playbook</p></div><label class="button outline" for="upload">${ic('plus')} Open PDF<input id="upload" type="file" accept="application/pdf" hidden onchange="uploadPdf(this)"></label></div>`;}
+<div class="metrics mt">${metric('ELEMENT INSTANCES',fmt(d.elements.reduce((s,e)=>s+e.instances,0)),conflict?'Conflicting source count':d.seeded?'Pile P1 · sample schedule':'Read from source drawing')}${metric('CALCULATED BARS',fmt(items.reduce((n,i)=>n+i.quantity,0)),items.length?`${items.length} schedule line${items.length===1?'':'s'}, deterministic`:'Nothing calculated yet')}${metric('OPEN CLARIFICATIONS',open,conflict?'Plus an element-wide conflict':'Missing facts, never guessed',open?'amber':'')}${metric('EVIDENCE RECORDS',d.evidence.records.length,'Hash chain integrity checked','green')}</div>
+<div class="grid-two"><div><div class="section-heading"><h2>Active project</h2>${tag('Session live','green')}</div><div class="panel"><div class="project-row"><div class="project-art">${miniDrawing()}</div><div class="project-info"><b>${d.seeded?'Atlantic Cages · Pile P1':esc(d.run.project_id)}</b><small>${d.seeded?'Sample schematic · S101 + S103':esc([state.project?.client,state.project?.site].filter(Boolean).join(' · ')||`${d.elements.length} element famil${d.elements.length===1?'y':'ies'} · ${esc(d.playbook||'no playbook')}`)}</small><div class="project-meta">${tag(d.seeded?'Sample inputs':'Source PDF')}${tag(status,conflict?'red':d.questions.length?'amber':'green')}</div></div>${button(`Open ${ic('arrowRight')}`,"go('drawings')",'outline small')}</div><div class="panel-pad" style="padding-top:0"><div class="progress-line"><i style="width:${conflict?0:released.length/2*100}%"></i></div><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted)"><span>${released.length} released BBS lines</span><span>${d.questions.length} questions awaiting review</span></div></div></div>${d.seeded?'':'<div class="notice mt">Real PDF intake uses the pile playbook. Scanned drawings and other element families may remain unresolved. The project rulebook requires approval.</div>'}</div>
+<div><div class="section-heading"><h2>Put trust to the test</h2><span class="muted" style="font-size:10px">DEMO SCENARIOS</span></div><div class="panel panel-pad"><div class="scenario"><span class="scenario-icon">?</span><div><b>A detail is missing. What happens?</b><p>Approve a leg dimension and see the bar schedule update.</p><button class="quiet" onclick="go('review')">Explore clarification →</button></div></div><div class="scenario"><span class="scenario-icon" style="background:var(--stop-soft);color:var(--stop-ink)">≠</span><div><b>Two sources disagree.</b><p>Preserve the conflict and prevent an unsupported release.</p><button class="quiet" onclick="start('conflict')">Run conflict scenario →</button></div></div></div></div></div>
+<div class="section-space section-heading"><div><h2>Bring your own drawing</h2><p>Native-text pile PDF · up to 25 MB · other drawing families require a new playbook</p></div><label class="button outline" for="upload">${ic('plus')} Open PDF<input id="upload" type="file" accept="application/pdf" hidden onchange="uploadPdf(this)"></label></div>`;countUp();}
 async function uploadPdf(input){if(!input.files[0])return;toast('Checking PDF…');try{const r=await api('/projects/upload',{method:'POST',headers:{'Content-Type':'application/pdf'},body:input.files[0]});await start('clarification',r.project_id);}catch(e){toast(e.message);input.value='';}}
 function miniDrawing(){return '<svg viewBox="0 0 70 75" fill="none" stroke="#597871"><rect x="7" y="7" width="56" height="60"/><path d="M16 20h38M16 25h38M16 30h38M20 36v22h9V36zM37 36v22h9V36zM12 62h46" stroke-width=".7"/></svg>';}
 function sampleDrawing(){const conflict=state.data.scenario==='conflict';const resolved=['structured','approval'].includes(state.data.scenario);const circles=Array.from({length:12},(_,i)=>{const a=i*Math.PI/6;return `<circle cx="${478+49*Math.cos(a)}" cy="${230+49*Math.sin(a)}" r="3" fill="#3c5554"/>`;}).join('');return `<svg viewBox="0 0 700 610" role="img" aria-label="Illustrative pile drawing with selectable count, diameter, length and reinforcement callouts. Not for construction."><defs><pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0v7" stroke="#a3aaa0" stroke-width=".55"/></pattern><marker id="arr" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse"><path d="M6 0L0 3l6 3" fill="none" stroke="#58716b" stroke-width=".7"/></marker></defs><rect x="22" y="22" width="656" height="566" fill="none" stroke="#607367" stroke-width="1"/><g font-family="ui-monospace,monospace" fill="#415b52"><text x="42" y="49" font-size="11" letter-spacing="1">ATLANTIC CAGES / PILE REINFORCEMENT</text><path d="M42 82h616" stroke="#a0aca0"/><text x="43" y="108" font-size="10">PILE SCHEDULE</text><g fill="none" stroke="#7a8a7d" stroke-width=".7"><rect x="43" y="119" width="615" height="55"/><path d="M43 144h615M155 119v55M285 119v55M435 119v55M550 119v55"/></g><g font-size="8"><text x="55" y="135">MARK</text><text x="170" y="135">QUANTITY</text><text x="300" y="135">DIAMETER (mm)</text><text x="450" y="135">LENGTH (mm)</text><text x="565" y="135">LONGITUDINAL</text></g><g font-size="10"><text x="55" y="162">P1</text><text x="170" y="162">6 OFF</text><text x="300" y="162">1000 Ø</text><text x="450" y="162">11,150</text><text x="565" y="162">12–30M</text></g><text x="43" y="205" font-size="9">SECTION A–A</text><g stroke="#5b6f62" fill="none" stroke-width="1"><rect x="120" y="233" width="110" height="257" fill="url(#hatch)"/><rect x="139" y="233" width="72" height="257" fill="#fffef9"/><path d="M145 217v273M205 217v273" stroke-width="2"/>${Array.from({length:17},(_,i)=>`<path d="M137 ${245+i*14}h77" stroke-width=".7"/>`).join('')}<path d="M120 221v-14M230 221v-14M120 209h110" marker-start="url(#arr)" marker-end="url(#arr)"/><path d="M107 233H80M107 490H80M88 233v257" marker-start="url(#arr)" marker-end="url(#arr)"/><path d="M211 275h60l22-17M210 374h49l35-17"/></g><text x="146" y="202" font-size="9">1000 Ø</text><text x="75" y="378" transform="rotate(-90 75 378)" font-size="9">11,150 mm</text><text x="270" y="250" font-size="10">12–30M</text><text x="265" y="347" font-size="10">15M @ 350</text>${resolved?'<text x="250" y="422" font-size="8" fill="#3f8f6f">BAR LEGS: STATED</text><text x="250" y="439" font-size="8" fill="#3f8f6f">SPIRAL RUN: STATED</text>':'<text x="250" y="422" font-size="8" fill="#ab7d3d">BAR LEGS: NOT STATED</text><text x="250" y="439" font-size="8" fill="#ab7d3d">SPIRAL RUN: NOT STATED</text>'}<circle cx="478" cy="260" r="67" fill="url(#hatch)" stroke="#5b6f62"/><circle cx="478" cy="260" r="52" fill="#fffef9" stroke="#5b6f62"/><g transform="translate(0 30)">${circles}</g><path d="M420 349h116" stroke="#58716b" marker-start="url(#arr)" marker-end="url(#arr)"/><text x="448" y="365" font-size="9">1000 Ø</text><text x="418" y="390" font-size="9">PILE CROSS-SECTION</text><text x="420" y="407" font-size="8">12 equally spaced bars</text><text x="43" y="528" font-size="8">${conflict?'CONFLICT NOTE: PLAN SHOWS 8 / SCHEDULE SHOWS 6':'DIMENSIONS IN mm / SCHEMATIC ARRANGEMENT ONLY'}</text><path d="M22 545h656M430 545v43M558 545v43" stroke="#758777"/><text x="42" y="563" font-size="8">TRUSTSIGHT · DEMONSTRATION DRAWING</text><text x="446" y="563" font-size="7">SHEET</text><text x="446" y="579" font-size="10">S101 / S103</text><text x="573" y="563" font-size="7">REVISION</text><text x="573" y="579" font-size="10">DEMO 01</text></g>${[['count',155,144,130,30],['diameter',285,144,150,30],['length',435,144,115,30],['bars',552,144,104,30],['spacing',259,329,95,27]].map(([id,x,y,w,h])=>`<rect tabindex="0" role="button" aria-label="Inspect ${id}" data-fact="${id}" class="hotspot ${state.selected===id?'selected':''}" x="${x}" y="${y}" width="${w}" height="${h}" fill="transparent" stroke="#c8dcd0" stroke-dasharray="4 3"/>`).join('')}</svg>`;}
@@ -174,6 +496,22 @@ function factRows(){
 
 function relationshipMap(){const d=state.data,e=d.elements[0];if(!e||!d.facts.length)return '';const bySheet={};d.facts.forEach(f=>{const s=f.source?.sheet_no||f.source?.document_id||'—';(bySheet[s]=bySheet[s]||[]).push(f.field);});const sheets=Object.entries(bySheet);if(!sheets.length)return '';return `<div class="panel panel-pad mt"><div class="section-heading"><h2>Cross-sheet relationship map</h2><span class="muted" style="font-size:10px">WHY THESE FACTS BELONG TO ONE ELEMENT</span></div><div class="relationship-map">${sheets.map(([sheet,fields])=>`<div class="rel-sheet"><b>${esc(sheet)}</b><small>${fields.map(f=>esc(f.replaceAll('_',' '))).join(', ')}</small></div><span class="rel-arrow">→</span>`).join('')}<div class="rel-element">${esc(e.mark||'Element')}<small>${e.instances} instance${e.instances===1?'':'s'} · ${esc(e.element_type)}</small></div></div><p class="explanation mt">Every fact above resolves to the same physical element by identity and cross-sheet reference, not by coincidence of file order.</p></div>`;}
 function drawings(){const d=state.data;$('#main').innerHTML=head('A drawing. A connected understanding.','Select a detail to inspect its meaning, source and calculation impact.',button(`Review ${d.questions.length} questions ${ic('arrowRight')}`,"go('review')"))+`<div class="drawing-layout"><div class="panel"><div class="panel-title"><span>${d.seeded?'P1 / Reinforcement details':esc(d.document)}</span><div class="tabs"><button class="${state.view==='drawing'?'active':''}" onclick="state.view='drawing';drawings()">Drawing</button><button class="${state.view==='spatial'?'active':''}" onclick="state.view='spatial';drawings()">3D view</button></div></div>${state.view==='drawing'?`<div class="drawing-canvas" id="drawing-canvas">${d.seeded?sampleDrawing():`<img src="/runs/${state.runId}/drawing?page=${state.page}" alt="Source drawing page ${state.page}">`}</div><div class="canvas-foot"><span>${d.seeded?'Select a highlighted schedule cell':'Original PDF rendering · extraction uses native text'}</span><span>${!d.seeded?`<button class="quiet" onclick="changePage(-1)" ${state.page<=1?'disabled':''} aria-label="Previous page">${ic('chevL',13)}</button> ${state.page} / ${state.pages} <button class="quiet" onclick="changePage(1)" ${state.page>=state.pages?'disabled':''} aria-label="Next page">${ic('chevR',13)}</button>`:'S101 / S103 · Sample'}</span></div>`:`<canvas id="scene" class="scene-view" aria-label="Rotatable three-dimensional pile envelope view"></canvas><div class="view-note">Drag to orbit · wheel to zoom · envelope geometry from this run · not a fabrication or BIM model</div>`}</div><div><div class="panel"><div class="panel-title"><span>Resolved drawing facts</span>${tag(d.seeded?'Sample input':'Native text','green')}</div>${factRows().map(([id,label,value,source])=>`<button class="fact ${state.selected===id?'selected':''}" onclick="selectFact('${id}')"><div><label>${label}</label><strong>${esc(value)}</strong><small>${esc(source)}</small></div><span style="color:var(--accent)">${ic('arrowUpRight')}</span></button>`).join('')||'<div class="empty">No supported facts found in this drawing set. Review the source PDF.</div>'}</div><div class="panel panel-pad mt" id="fact-detail"></div>${relationshipMap()}<div class="notice mt">${d.scenario==='conflict'?'Count conflict: sample schedule lists 6 piles; plan lists 8. Element-wide release is blocked.':d.questions.length?`${d.questions.length} details still need clarification. Unresolved reinforcement is excluded from calculation.`:'All requested clarifications have answers. Review the schedule and release decisions.'}</div>${d.facts.length?`<details class="panel panel-pad mt"><summary>Source citations (${d.facts.length})</summary>${d.facts.slice(0,12).map(f=>`<p class="explanation"><b>${esc(f.field)}:</b> ${esc(f.value)}<br>${esc(f.source?.sheet_no||f.source?.document_id)} · page ${f.source?.page}</p>`).join('')}</details>`:''}</div></div>`;showFact();document.querySelectorAll('.hotspot').forEach(el=>{el.onclick=()=>selectFact(el.dataset.fact);el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();selectFact(el.dataset.fact);}};});if(state.view==='spatial')drawScene();}
+/* The released mass changes in front of the room when a clarification is
+   answered. Counting to the new value makes that visible; the last frame is
+   assigned exactly, so the number on screen is never an animation artefact. */
+function countUp(){
+  const el=document.querySelector('[data-count]'); if(!el)return;
+  const to=Number(el.dataset.count)||0, from=Number(state.lastMass||0);
+  state.lastMass=to;
+  if(to===from||!to)return;
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+  const t0=performance.now(), ms=620;
+  (function tick(now){
+    const k=Math.min(1,(now-t0)/ms), e=1-Math.pow(1-k,3);
+    el.textContent=fmt(from+(to-from)*e,1);
+    if(k<1)requestAnimationFrame(tick); else el.textContent=fmt(to,1);
+  })(t0);
+}
 function selectFact(id){state.selected=id;drawings();}
 function showFact(){const f=factRows().find(r=>r[0]===state.selected);$('#fact-detail').innerHTML=f?`<div class="eyebrow">WHY THIS MATTERS</div><h3 class="help-title">${f[1]}</h3><p class="explanation">${f[4]}</p><span class="tag">${state.data.seeded?'Sample schematic reference':'See source citations for extracted values'}</span>`:'<p class="explanation">Choose a fact to inspect its engineering meaning.</p>';}
 function changePage(delta){state.page=Math.max(1,Math.min(state.pages,state.page+delta));drawings();}
@@ -205,6 +543,163 @@ function openExports(){
   $('#modal').showModal();
 }
 function inspector(i){const x=i.explanation;const count=x.count_basis==='explicit count'?`${x.per_instance} bars × ${x.instances} piles`:`(floor(${fmt(x.run_length_mm)} / ${fmt(x.spacing_mm)}) + 1) × ${x.instances}`;return `<div class="inspector"><div class="section-heading"><h2>Inside the number <span class="muted">/ ${esc(i.mark)}</span></h2>${tag('Deterministic calculation','green')}</div><div class="inspector-grid"><div>${shapeSvg(i)}<p class="explanation">Shape ${esc(i.bend_type)} · schematic, not to scale<br>${esc(x.role)} · ${esc(x.rulebook)}<br>${esc(i.release_reason)}</p></div><div><div class="equation"><small>Quantity</small><b>${count} = ${fmt(i.quantity)} bars</b></div><div class="equation"><small>Cutting length · out-to-out leg sum</small><b>${esc(x.length_basis)} = ${fmt(i.cutting_length_mm)} mm</b></div><div class="equation"><small>Mass · quantity × metres × kg/m</small><b>${i.quantity} × ${i.cutting_length_mm/1000} × ${x.unit_mass} = ${fmt(i.total_mass_kg,1)} kg</b></div></div></div><div class="checklist">${Object.entries(i.gates||{}).filter(([k])=>k.startsWith('g')).map(([k,v])=>{const ok=k==='g4_source_quality'?['native_text','vector_path'].includes(v):v;return `<span style="color:${ok?'var(--accent)':'var(--attn)'}">${ok?ic('check',13):'!'} ${esc(k.replace(/^g\d_/,'').replaceAll('_',' '))}</span>`;}).join('')}</div></div>`;}
+
+/* ── Auto assessment (spec v2 s7) ─────────────────────────────────────────────
+   The route, and the plain-language reason for it, as its own screen. It used
+   to be buried in a details panel, which made the product's most defensible
+   claim — "it understands what kind of input this is" — the hardest thing on
+   the page to find. */
+function assess(){
+  const d=state.data, r=d.route_detail||{}, steps=d.steps||[];
+  const inRoute=steps.filter(s=>s.status==='executed').length;
+  const na=steps.filter(s=>s.status==='not_applicable').length;
+  const ni=steps.filter(s=>s.status==='not_implemented').length;
+  const tiers=[...new Set((d.elements||[]).map(e=>e.element_type))];
+  $('#main').innerHTML=head('This is the kind of drawing set you gave us.',
+    'Preflight reads every sheet before any agent runs, then picks the route that input actually supports.',
+    button(`Watch the agents run ${ic('arrowRight')}`,"go('flow')"))+`
+  <div class="route-hero panel panel-pad">
+    <div>
+      <div class="eyebrow">ROUTE SELECTED</div>
+      <h2>${esc((r.route||'—').replace('_','-'))}</h2>
+      <p class="explanation">${esc(r.summary||'')}</p>
+      <div class="route-why mt">
+        <b>Why this route</b>
+        <p>${esc(r.input_quality||'')} — so the run must ${esc((r.summary||'').toLowerCase().replace(/\.$/,''))}.</p>
+      </div>
+      <div class="route-why">
+        <b>What it expects from a person</b>
+        <p>${esc(r.expected_human||'')}</p>
+      </div>
+    </div>
+    <div class="route-side">
+      ${[['Playbook',d.playbook||'none matched'],['Documents',d.document||'—'],
+         ['Element family',tiers.join(', ')||'—'],['Rulebook',d.rulebook?.version||'—']]
+        .map(([k,v])=>`<div class="route-fact"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}
+    </div>
+  </div>
+  <div class="metrics mt">
+    ${metric('STEPS EXECUTED',inRoute,'Of the 23-step architecture')}
+    ${metric('NOT APPLICABLE',na,'This route genuinely does not need them')}
+    ${metric('NOT IMPLEMENTED',ni,ni?'In the route, absent from this build':'Nothing missing on this route',ni?'amber':'')}
+    ${metric('ROUTES AVAILABLE','2 <em>/ 3</em>','Unstructured is refused by design, not attempted')}
+  </div>
+  <div class="grid-two mt">
+    <div class="panel panel-pad">
+      <div class="section-heading"><h2>Steps this route skips</h2>${tag('And why','green')}</div>
+      <p class="explanation">"Not run" is three different facts. A client who cannot tell a deliberate design from a gap will assume the worse one.</p>
+      <div class="skip-list mt">
+        ${Object.entries(r.excluded||{}).map(([k,v])=>`<div class="skip"><b>${esc(k.replaceAll('_',' '))}</b><p>${esc(v)}</p></div>`).join('')||'<p class="explanation">This route uses every step it defines.</p>'}
+      </div>
+    </div>
+    <div>
+      <div class="panel panel-pad">
+        <div class="section-heading"><h2>The route we refuse</h2>${tag('Unstructured','amber')}</div>
+        <p class="explanation">Scans and mixed notation need sheet classification, element detection and model-based reinforcement interpretation. None is built here, so the route is declined outright rather than started and failed half way.</p>
+        <p class="explanation mt"><b>Say this to a client:</b> we would rather show you a boundary than a broken run.</p>
+      </div>
+      ${d.facts?.length?`<div class="panel panel-pad mt"><div class="section-heading"><h2>First facts read</h2>${tag(d.facts.length+' cited','green')}</div>
+        ${d.facts.slice(0,6).map(f=>`<div class="fact-line"><b>${esc(f.field)}</b><span>${esc(f.value)}</span><small>${esc(f.source?.sheet_no||f.source?.document_id||'')}</small></div>`).join('')}</div>`:''}
+    </div>
+  </div>`;
+}
+
+/* ── Live agent flow (spec v2 s8) ────────────────────────────────────────────
+   The 23 steps as they happen. Polls while the run is moving and stops when
+   it settles, so a client watches work rather than a finished list. */
+function flow(){
+  const d=state.data, steps=d.steps||[];
+  const done=steps.filter(s=>s.status==='executed').length;
+  const running=['running','pending'].includes(d.run?.state);
+  const roi=d.roi?.steps||[];
+  const ms=Object.fromEntries(roi.map(s=>[s.step,s]));
+  $('#main').innerHTML=head('Watch the work, not a spinner.',
+    'Every one of the 23 architecture steps, what it did, and what it cost.',
+    running?`<span class="tag green">${ic('play',11)} Running</span>`:button(`Review what it asked ${ic('arrowRight')}`,"go('review')"))+`
+  <div class="metrics">
+    ${metric('STEPS EXECUTED',done,`Run state: ${esc(d.run?.state||'—')}`)}
+    ${metric('MACHINE TIME',fmt(d.roi?.effort?.machine_ms||0)+' <em>ms</em>','Measured, not estimated')}
+    ${metric('FACTS EXTRACTED',fmt(d.roi?.work?.values_extracted||0),'Transcribed from the drawing')}
+    ${metric('EXCEPTIONS RAISED',fmt(d.roi?.work?.exceptions||0),'Routed to a person, never guessed')}
+  </div>
+  <div class="panel mt">
+    <div class="panel-title"><span>23-step orchestration</span>${tag(esc((d.route||'').replace('_','-')),'green')}</div>
+    <ol class="timeline">
+      ${steps.map(s=>{
+        const m=ms[s.no];
+        const cls=s.ok===false?'failed':s.status;
+        const label={executed:'executed',not_applicable:'not applicable',
+          not_implemented:'not implemented',missing:'missing',waiting:'waiting'}[s.status]||s.status;
+        const active=running&&s.status!=='executed'&&s.status!=='not_applicable'&&s.no===(steps.find(x=>x.status!=='executed'&&x.status!=='not_applicable')||{}).no;
+        return `<li class="tl ${cls}${active?' is-active':''}">
+          <span class="tl-dot">${s.status==='executed'&&s.ok?ic('check',11):s.no}</span>
+          <span class="tl-body">
+            <b>${esc(s.name.replaceAll('_',' '))}</b>
+            <small>${esc(s.kind)}${s.excluded_because?' · '+esc(s.excluded_because):''}</small>
+          </span>
+          <span class="tl-cost">${m?fmt(m.duration_ms)+' ms':''}</span>
+          ${tag(s.ok===false?'failed':label,s.ok===false?'red':s.status==='executed'?'green':s.status==='not_implemented'?'amber':'')}
+        </li>`;}).join('')}
+    </ol>
+  </div>
+  <div class="notice mt">Steps outside this route are marked <b>not applicable</b> with the reason. A step in the route with no handler would read <b>not implemented</b> — and this route has none.</div>`;
+  if(running)pollFlow();
+}
+async function pollFlow(){
+  for(let i=0;i<40;i++){
+    await sleep(700);
+    if(state.tab!=='flow')return;
+    await refresh();
+    if(state.tab==='flow')flow();
+    if(!['running','pending'].includes(state.data?.run?.state))return;
+  }
+}
+
+/* ── Ask TrustSight (spec v2 s9) ─────────────────────────────────────────────
+   Grounded or silent. The server answers from this run's own records and
+   declines anything it cannot ground, because a query bar that guesses an
+   engineering fact refutes the product it is attached to. */
+async function openAsk(){
+  if(!state.runId)return toast('Open a project first.');
+  let ex=[];
+  try{ex=(await api('/ask/examples')).examples||[];}catch{}
+  $('#modal-body').innerHTML=`<div class="modal-head"><h2>Ask TrustSight</h2><button class="quiet" onclick="$('#modal').close()" aria-label="Close">${ic('close',16)}</button></div>
+  <div class="modal-content ask">
+    <form onsubmit="submitAsk(event)">
+      <div class="ask-bar">
+        <input id="ask-input" autocomplete="off" placeholder="Ask about this project…" aria-label="Ask TrustSight">
+        <button class="button" type="submit">Ask ${ic('arrowRight')}</button>
+      </div>
+    </form>
+    <div class="notice mt">Answers are queries over this project's graph, evidence chain, run state, rulebook and controls — not generated text. No model is configured in this build, and an unmatched question is declined rather than guessed.</div>
+    <div class="ask-examples mt">${ex.map(e=>`<button class="chip" onclick="askNow(${JSON.stringify(e.question).replace(/"/g,'&quot;')})">${esc(e.question)}</button>`).join('')}</div>
+    <div id="ask-out"></div>
+  </div>`;
+  $('#modal').showModal();
+  setTimeout(()=>$('#ask-input')?.focus(),60);
+}
+function submitAsk(ev){ev.preventDefault();askNow($('#ask-input').value);}
+async function askNow(q){
+  const out=$('#ask-out'); if(!out)return;
+  if($('#ask-input'))$('#ask-input').value=q;
+  out.innerHTML=`<div class="loading"><span class="spinner"></span>Querying this project…</div>`;
+  try{
+    const a=await post(`/runs/${state.runId}/ask`,{question:q});
+    out.innerHTML=`<div class="ask-answer">
+      <div class="ask-q">${esc(q)}</div>
+      <p class="ask-text">${esc(a.text)}</p>
+      ${a.rows?.length?`<div class="table-wrap mt"><table><thead><tr><th>What</th><th>Where</th><th>Detail</th></tr></thead><tbody>
+        ${a.rows.map(r=>`<tr><td><b>${esc(r.what)}</b></td><td>${esc(r.where)}</td><td>${esc(r.why)}</td></tr>`).join('')}
+      </tbody></table></div>`:''}
+      <div class="ask-foot">
+        ${(a.citations||[]).map(c=>`<span class="tag green">${esc(c.kind)}: ${esc(c.ref)}</span>`).join('')}
+        ${a.intent?'':tag('Not answered — no data to ground it','amber')}
+        ${a.goto?button(`Open ${esc(navs.find(n=>n[0]===a.goto)?.[1]||a.goto)} ${ic('arrowRight')}`,`$('#modal').close();go('${a.goto}')`,'outline small'):''}
+      </div>
+    </div>`;
+  }catch(e){out.innerHTML=`<div class="notice red mt">${esc(e.message)}</div>`;}
+}
+
 /* ── Diagrams ───────────────────────────────────────────────────────────────
    These replace the decorative photographs. A photograph of a rebar cage tells
    a buyer nothing they did not already know; these two drawings carry the two
@@ -431,8 +926,36 @@ const RELEASE_STYLE={released:{c:'#7ccbb1',w:1.2,dash:0},review:{c:'#e8c17c',w:1
       const pos=project(x,500,z);ctx.font='10px ui-monospace,monospace';ctx.fillStyle='#bed5d8';ctx.textAlign='center';ctx.fillText(((state.data.elements[0]?.element_type||'e')[0].toUpperCase())+(idx+1),...pos);});ctx.textAlign='left';ctx.fillStyle='#d3e8e4';ctx.font='12px sans-serif';ctx.fillText(((state.data.elements[0]?.element_type||'element').replaceAll('_',' ')+' envelopes / spatial completeness').toUpperCase(),20,28);ctx.font='10px sans-serif';ctx.fillStyle='#8aafb6';ctx.fillText(`${elements.length} placements · ${(length/1000).toFixed(2)} m maximum length · ${(state.scene?.nodes||[]).some(n=>(n.placements||[]).some(p=>p.schematic))?'schematic placement — source states a count, not coordinates':state.data.seeded?'sample geometry':'source-derived geometry'}`,20,48);ctx.fillText('Wireframe lines describe concrete envelopes, not individual reinforcing bars.',20,h-18);
     const legend=[['released','#7ccbb1','released'],['review','#e8c17c','calculated, held'],['blocked','#e8897f','blocked']];
     legend.forEach(([k,c,label],i)=>{const lx=20+i*150,ly=h-38;ctx.strokeStyle=c;ctx.lineWidth=2;ctx.setLineDash(k==='released'?[]:[5,4]);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(lx+18,ly);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#9db6bd';ctx.font='10px sans-serif';ctx.fillText(label,lx+24,ly+3);});if(!elements.length){ctx.fillStyle='#d3e8e4';ctx.fillText('No supported placements available for this drawing.',25,h/2);}}canvas.onpointerdown=e=>{drag=true;lastX=e.clientX;canvas.setPointerCapture(e.pointerId);};canvas.onpointermove=e=>{if(drag){yaw+=(e.clientX-lastX)*.008;lastX=e.clientX;paint();}};canvas.onpointerup=()=>drag=false;canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(.5,Math.min(2.5,zoom-e.deltaY*.001));paint();};const ro=new ResizeObserver(()=>paint());ro.observe(canvas);setTimeout(()=>{if(!canvas.isConnected)ro.disconnect();},1000);paint();}catch(e){toast('Spatial view unavailable: '+e.message);}}
-$('#reset').onclick=newRun;$('#capabilities-button').onclick=()=>go('capabilities');$('#present').onclick=()=>{document.body.classList.toggle('presentation');$('#present').querySelector('span').textContent=document.body.classList.contains('presentation')?'Exit present':'Present';};$('#walkthrough').onclick=playWalkthrough;$('#print-summary').onclick=()=>{go('results');setTimeout(()=>window.print(),150);};$('#modal').addEventListener('click',e=>{if(e.target===$('#modal'))$('#modal').close();});
+$('#reset').onclick=newRun;$('#project-switch').onclick=openProjects;$('#profile').onclick=signOut;$('#ask-open').onclick=openAsk;
+document.addEventListener('keydown',e=>{
+  if(e.key==='/'&&!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName||'')&&!STAGE.hidden===false){e.preventDefault();openAsk();}
+});$('#capabilities-button').onclick=()=>go('capabilities');$('#present').onclick=()=>{document.body.classList.toggle('presentation');$('#present').querySelector('span').textContent=document.body.classList.contains('presentation')?'Exit present':'Present';};$('#walkthrough').onclick=playWalkthrough;$('#print-summary').onclick=()=>{go('results');setTimeout(()=>window.print(),150);};$('#modal').addEventListener('click',e=>{if(e.target===$('#modal'))$('#modal').close();});
 function setTheme(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('trustsight-theme',t);}catch{}}
 $('#theme-toggle').onclick=()=>{const now=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';setTheme(now);if(state.view==='spatial'&&state.tab==='drawings')drawings();};
 (()=>{try{if(!localStorage.getItem('trustsight-theme'))setTheme(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');}catch{setTheme('light');}})();
-(async()=>{const saved=localStorage.getItem('trustsight-run');if(saved){state.runId=saved;try{await refresh();state.pages=(await api(`/runs/${state.runId}/document`)).pages;go('overview');return;}catch{localStorage.removeItem('trustsight-run');}}await start();})();
+/* Boot. The app opens on a product, not on a pipeline: no session means the
+   sign-in stage, a session with no run in progress means the projects stage.
+   Only a run already under way drops straight into the workspace, so a
+   refresh mid-demo does not lose the presenter's place. */
+(async()=>{
+  let email=null; try{email=localStorage.getItem('trustsight-user');}catch{}
+  if(email){
+    try{
+      const d=await api('/session/users');
+      state.user=d.users.find(u=>u.email===email)||null;
+    }catch{}
+  }
+  if(!state.user){await signIn();return;}
+  paintIdentity();
+  const saved=localStorage.getItem('trustsight-run');
+  if(saved){
+    state.runId=saved;
+    try{
+      await refresh();
+      state.pages=(await api(`/runs/${state.runId}/document`)).pages;
+      try{state.project=await api('/api/projects/'+encodeURIComponent(state.data.run.project_id));paintProject();}catch{}
+      hideStage(); go('overview'); return;
+    }catch{localStorage.removeItem('trustsight-run');}
+  }
+  await openProjects();
+})();

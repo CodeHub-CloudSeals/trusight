@@ -5,6 +5,10 @@ import sys
 import time
 import urllib.request
 
+#: Every write now records who acted (spec v2 s2). Operator scripts run as
+#: the admin demo user; the role rules are tested in test_roles.py.
+ACTOR = "priya.raman@demo-client.com"
+
 B = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8821").rstrip("/")
 FAIL = []
 
@@ -17,8 +21,10 @@ def check(label, ok, detail=""):
 
 def req(path, body=None, raw=False):
     d = json.dumps(body).encode() if body is not None else None
-    r = urllib.request.Request(B + path, data=d,
-                               headers={"Content-Type": "application/json"} if d else {})
+    headers = {"x-trustsight-user": ACTOR}
+    if d:
+        headers["Content-Type"] = "application/json"
+    r = urllib.request.Request(B + path, data=d, headers=headers)
     with urllib.request.urlopen(r, timeout=120) as resp:
         payload = resp.read()
         return (payload, resp) if raw else json.loads(payload)

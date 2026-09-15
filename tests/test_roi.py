@@ -97,7 +97,7 @@ def test_decision_history_survives_a_rulebook_sign_off():
 
     from trustsight.api.main import app
 
-    client = TestClient(app)
+    client = TestClient(app, headers={'x-trustsight-user': 'priya.raman@demo-client.com'})
     run_id = client.post("/runs", json={"project_id": "atlantic-demo",
                                         "scenario": "approval"}).json()["run_id"]
     run = client.get(f"/runs/{run_id}").json()

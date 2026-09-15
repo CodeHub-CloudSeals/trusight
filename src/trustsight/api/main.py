@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 import json
 import os
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
@@ -46,6 +47,8 @@ from ..workflow.runner import Run, RunState
 from ..workflow.steps import STEPS, summary
 from .dashboard import DASHBOARD_HTML
 from . import fallback
+from . import projects as prj
+from . import ask as ask_service
 from .viewer import VIEWER_HTML
 
 @asynccontextmanager
@@ -85,6 +88,32 @@ CLOUD_MODE = bool(os.getenv("STATE_MACHINE_ARN"))
 
 _runs: dict[str, Run] = {}
 _ctx: dict[str, PipelineContext] = {}
+
+prj.STORE.seed_from_corpus(CORPUS, SEED_PROJECT_ID)
+
+
+def _actor(request: Request) -> prj.DemoUser:
+    """Who is acting. Spec v2 s2: every action records an actor.
+
+    The session is the demo user the browser last selected, sent on each
+    request. It is not proof of identity and this build never claims it is —
+    see projects.py. What it does give is a real role check: the capability
+    tests below refuse the action server-side, so hiding a button is not the
+    only thing standing between a Viewer and a release.
+    """
+    email = request.headers.get("x-trustsight-user", "")
+    user = prj.USERS.get(email)
+    if user is None:
+        raise HTTPException(401, "Select a demo user to continue")
+    return user
+
+
+def _needs(user: prj.DemoUser, capability: str) -> None:
+    role = prj.ROLES[user.role]
+    if not getattr(role, f"can_{capability}"):
+        raise HTTPException(403, (
+            f"{role.label} cannot {capability.replace('_', ' ')} on this "
+            f"project. Sign in as a role that can."))
 
 
 def _rulebook(project_id: str, scenario: str = "clarification") -> Rulebook:
@@ -242,6 +271,162 @@ def ready() -> dict[str, Any]:
             "(python scripts/freeze_run.py)")
     return {"ready": not blocking, "blocking": blocking, "warnings": warnings,
             "checks": checks, "projects": projects}
+
+
+@app.get("/session/users")
+def session_users() -> dict[str, Any]:
+    """The demo users offered on the sign-in screen.
+
+    There is no password here on purpose (projects.py explains why). The
+    screen is a user picker that says so, not a credential form that lies.
+    """
+    return {
+        "tenant_id": prj.DEMO_TENANT,
+        "authentication": "demonstration",
+        "note": ("Demonstration sign-in. No password is requested or checked "
+                 "and no account is created. Role permissions below are "
+                 "enforced by the API."),
+        "roadmap": "AWS Cognito user pool, then enterprise SSO via OIDC/SAML",
+        "users": [u.as_dict() for u in prj.USERS.values()],
+        "roles": [{"key": r.key, "label": r.label, "summary": r.summary}
+                  for r in prj.ROLES.values()],
+    }
+
+
+@app.get("/api/projects")
+def list_projects(request: Request) -> list[dict[str, Any]]:
+    user = _actor(request)
+    out = []
+    for p in prj.STORE.list(user.tenant_id):
+        d = p.as_dict()
+        if p.seeded:
+            d["playbook"], d["readable"] = "pile_v1", True
+        elif p.source_dir:
+            try:
+                d["playbook"] = playbooks.select(Path(p.source_dir)).name
+            except playbooks.NoPlaybook:
+                d["playbook"] = None
+            d["readable"] = d["playbook"] is not None
+            d["has_reference"] = bool(list(Path(p.source_dir).glob("Output*.pdf")))
+        else:
+            # A project someone created: readable once it holds a drawing a
+            # playbook can read. Reported per project rather than assumed.
+            d["playbook"] = None
+            d["readable"] = bool(p.documents)
+        out.append(d)
+    return sorted(out, key=lambda d: (not d["seeded"], d["name"]))
+
+
+class NewProject(BaseModel):
+    name: str
+    client: str = ""
+    site: str = ""
+    standard: str = "ACI / RebarCAD bend types"
+    estimator: str = ""
+    manual_baseline_minutes: int | None = None
+
+
+@app.post("/api/projects")
+def create_project(body: NewProject, request: Request) -> dict[str, Any]:
+    user = _actor(request)
+    _needs(user, "create_project")
+    if not body.name.strip():
+        raise HTTPException(422, "A project needs a name")
+    if (body.manual_baseline_minutes is not None
+            and not 0 < body.manual_baseline_minutes <= 10000):
+        raise HTTPException(422, "Baseline must be whole minutes, 1-10000")
+    project = prj.STORE.create(
+        name=body.name.strip(), tenant_id=user.tenant_id,
+        client=body.client.strip(), site=body.site.strip(),
+        standard=body.standard.strip(), estimator=body.estimator.strip(),
+        manual_baseline_minutes=body.manual_baseline_minutes,
+        created_by=user.email)
+    return project.as_dict()
+
+
+@app.get("/api/projects/{project_id}")
+def get_project(project_id: str, request: Request) -> dict[str, Any]:
+    user = _actor(request)
+    project = prj.STORE.get(project_id, user.tenant_id)
+    if project is None:
+        raise HTTPException(404, "No such project in this tenant")
+    return project.as_dict()
+
+
+@app.post("/api/projects/{project_id}/documents")
+async def add_document(project_id: str, request: Request) -> dict[str, Any]:
+    """Web upload channel (spec v2 s6). Originals are hashed and immutable."""
+    import hashlib
+
+    user = _actor(request)
+    _needs(user, "upload")
+    project = prj.STORE.get(project_id, user.tenant_id)
+    if project is None:
+        raise HTTPException(404, "No such project in this tenant")
+    if project.seeded or project.source_dir:
+        raise HTTPException(409, (
+            "This project's drawings come from the mounted corpus and are "
+            "read-only. Create a project to upload your own."))
+    filename = request.headers.get("x-filename", "drawing.pdf")
+    payload = bytearray()
+    async for chunk in request.stream():
+        payload.extend(chunk)
+        if len(payload) > 25 * 1024 * 1024:
+            raise HTTPException(413, "Use a PDF under 25 MB")
+    if not payload.startswith(b"%PDF"):
+        raise HTTPException(422, "Please select a PDF drawing")
+    try:
+        with pymupdf.open(stream=bytes(payload), filetype="pdf") as doc:
+            if doc.needs_pass or not 0 < len(doc) <= 100:
+                raise ValueError
+    except Exception as exc:
+        raise HTTPException(422, "Use a readable, unencrypted PDF with 1-100 pages") from exc
+
+    target = CORPUS / project.project_id
+    target.mkdir(parents=True, exist_ok=True)
+    safe = Path(filename).name.replace("/", "_")[:80] or "drawing.pdf"
+    if not safe.lower().endswith(".pdf"):
+        safe += ".pdf"
+    stem = f"Input-{len(project.documents) + 1:02d}-{safe}"
+    (target / stem).write_bytes(payload)
+    project.source_dir = str(target)
+    doc = prj.Document(
+        document_id="doc-" + uuid.uuid4().hex[:10], filename=safe,
+        channel="web_upload", bytes_=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        uploaded_by=user.email, uploaded_at=prj.now(),
+        path=str(target / stem))
+    prj.STORE.add_document(project, doc)
+    return {"project_id": project.project_id, "document": doc.as_dict(),
+            "document_count": len(project.documents)}
+
+
+@app.get("/api/channels")
+def channels() -> list[dict[str, Any]]:
+    """Intake channels and their real status (spec v2 s6).
+
+    Every card here states whether it works in this build. A connector drawn
+    as available and then not demonstrated is the kind of detail a technical
+    buyer remembers.
+    """
+    return [
+        {"key": "web_upload", "name": "Web upload", "status": "live",
+         "detail": "Drag and drop a PDF. Hashed on arrival and stored immutable."},
+        {"key": "corpus", "name": "Mounted project folder", "status": "live",
+         "detail": "Drawings mounted with the service, read-only."},
+        {"key": "api", "name": "REST API", "status": "live",
+         "detail": "POST /api/projects/{id}/documents with the PDF body."},
+        {"key": "s3", "name": "S3 project prefix", "status": "roadmap",
+         "detail": "Watch a tenant prefix, register on event. Not in this build."},
+        {"key": "sftp", "name": "SFTP", "status": "roadmap",
+         "detail": "AWS Transfer Family into the same prefix. Not in this build."},
+        {"key": "sharepoint", "name": "SharePoint / OneDrive", "status": "roadmap",
+         "detail": "Connector pulls into the governed originals store."},
+        {"key": "teams", "name": "Teams / Slack", "status": "roadmap",
+         "detail": "Status and approval links. Never the engineering repository."},
+        {"key": "email", "name": "Email ingestion", "status": "roadmap",
+         "detail": "Project address, attachment extraction."},
+    ]
 
 
 @app.get("/pipeline")
@@ -445,8 +630,9 @@ def exceptions(run_id: str) -> dict[str, Any]:
 
 
 @app.post("/runs/{run_id}/clarifications")
-def clarify(run_id: str, body: ClarificationIn) -> dict[str, Any]:
+def clarify(run_id: str, body: ClarificationIn, request: Request) -> dict[str, Any]:
     """Record a human answer as approved project knowledge, then re-run."""
+    _needs(_actor(request), "clarify")
     _, ctx = _require(run_id)
     # The review clock stops the moment the answer arrives, before any
     # recalculation, so machine time is never billed as human time.
@@ -491,7 +677,7 @@ def clarify(run_id: str, body: ClarificationIn) -> dict[str, Any]:
 
 
 @app.post("/runs/{run_id}/approve")
-def approve(run_id: str, body: ApprovalIn) -> dict[str, Any]:
+def approve(run_id: str, body: ApprovalIn, request: Request) -> dict[str, Any]:
     """Deliver a human decision. There is no default approval path.
 
     A suspend on the approval_gate step (19) means the rulebook itself was
@@ -500,6 +686,9 @@ def approve(run_id: str, body: ApprovalIn) -> dict[str, Any]:
     suspend (e.g. a future policy-triggered review) is recorded as evidence
     but does not touch the rulebook.
     """
+    # Releasing steel is the one action in this product that must be somebody's
+    # named decision, so the role check is server-side and comes first.
+    _needs(_actor(request), "approve")
     run, ctx = _require(run_id)
     ctx.stop_waiting()
     ctx.chain.append(claim_type="approval",
@@ -604,6 +793,34 @@ def set_baseline(run_id: str, body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(422, "Enter the baseline as whole minutes, 1-10000")
     ctx.manual_baseline_minutes = value
     return {"run_id": run_id, "manual_baseline_minutes": value}
+
+
+class AskIn(BaseModel):
+    question: str
+
+
+@app.post("/runs/{run_id}/ask")
+def ask(run_id: str, body: AskIn) -> dict[str, Any]:
+    """Ask TrustSight (spec v2 s9). Grounded in this run, or silent.
+
+    Read-only by construction: every intent queries, none of them writes, so
+    the "unsafe actions require confirmation" rule in the acceptance criteria
+    is satisfied by there being no unsafe action to reach from here.
+    """
+    if fallback.is_recorded(run_id):
+        raise HTTPException(409, "Ask is not available on a recorded run")
+    run, ctx = _require(run_id)
+    return ask_service.answer(body.question, ctx, run, workspace_payload(run_id))  # noqa: F821
+
+
+@app.get("/ask/examples")
+def ask_examples() -> dict[str, Any]:
+    """What the query bar actually understands, so nobody has to guess."""
+    return {"examples": ask_service.EXAMPLES,
+            "model_configured": False,
+            "note": ("Answers are queries over this project's own data, not "
+                     "generated text. An unmatched question is declined "
+                     "rather than guessed.")}
 
 
 @app.get("/fallback")

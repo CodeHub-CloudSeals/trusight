@@ -15,6 +15,12 @@ tests/
 Claude outputs/
 *.png
 *.jpg
+# ...except a recorded fallback run's rendered pages. Those ARE the fallback:
+# strip them and the recorded run serves a workspace with no drawing, which
+# looks like a broken demo at the exact moment the live path has already
+# failed. data/fallback/ is git-ignored, so this only matters when an
+# operator has deliberately frozen a run into the build context.
+!data/fallback/**/*.png
 
 # data/ is NOT excluded: the image copies it so a hosted demo can serve a
 # corpus. With no corpus present the directory holds only a README and the
