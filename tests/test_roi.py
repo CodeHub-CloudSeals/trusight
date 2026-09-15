@@ -163,3 +163,38 @@ def test_exact_result_is_not_reported_as_a_mismatch():
     assert all(i.mark is None for i in ctx.schedule.items), (
         "these drawings state no bar mark; if that changes, the comparison "
         "should tighten to the mark again")
+
+
+def test_a_released_line_shows_no_failed_gate():
+    """A released bar must not display a gate that reads as failed.
+
+    The rulebook was signed *after* the calculation and the resume replayed
+    from the suspended step, so step 16 never re-ran: every released line kept
+    a gate vector built against an unsigned rulebook. The schedule then showed
+    "! rule resolved" beside "all release conditions satisfied" on the same
+    row — the product contradicting itself on the screen the demo is built
+    around. The rulebook is now signed before the quantities are recalculated.
+    """
+    from fastapi.testclient import TestClient
+
+    from trustsight.api.main import app
+
+    client = TestClient(app, headers={"x-trustsight-user": "priya.raman@demo-client.com"})
+    run_id = client.post("/runs", json={"project_id": "atlantic-demo",
+                                        "scenario": "approval"}).json()["run_id"]
+    run = client.get(f"/runs/{run_id}").json()
+    assert run["pending_step"] == 19
+    client.post(f"/runs/{run_id}/approve", json={
+        "token": run["pending_token"], "approver": "engineer",
+        "answer": {"subject": "rulebook_approval", "decision": "approved"},
+        "rationale": "assumption sheet reviewed"})
+
+    data = client.get(f"/runs/{run_id}/workspace").json()
+    released = [i for i in data["schedule"]["items"] if i["release"] == "released"]
+    assert released, "the sign-off must actually release something"
+    for item in released:
+        failed = [k for k, v in item["gates"].items()
+                  if k.startswith("g") and v is False]
+        assert not failed, (
+            f"{item['size']} released while {failed} reads as a failed gate")
+        assert "satisfied" in item["release_reason"]

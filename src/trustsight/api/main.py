@@ -706,13 +706,34 @@ def approve(run_id: str, body: ApprovalIn, request: Request) -> dict[str, Any]:
         return {"run_id": run_id, "state": "resumed"}
 
     was_rulebook_gate = run.pending_step == 19 and not ctx.rulebook.is_approved()
+    if was_rulebook_gate:
+        # Sign the rulebook BEFORE the calculation resumes, not after.
+        #
+        # Signing afterwards left every released line carrying a gate vector
+        # computed against an unsigned rulebook: g3_rule_resolved stayed false
+        # while the release decision — which does read the later approval —
+        # said "all release conditions satisfied". The schedule then showed a
+        # failed gate beside that sentence on a released bar, which is exactly
+        # the contradiction this product exists to make impossible.
+        #
+        # An engineer signs the assumption sheet and the quantities are then
+        # evaluated against it. Doing it in that order makes the gate vector
+        # true rather than merely explained.
+        ctx.rulebook = replace(ctx.rulebook, approved_by=body.approver)
     try:
         runner = build_seeded_runner(ctx) if ctx.project_id == SEED_PROJECT_ID else build_runner(ctx)
         run = runner.resume(run, body.token or "", body.answer)
     except RuntimeError as exc:
         raise HTTPException(409, str(exc)) from exc
     if was_rulebook_gate:
-        ctx.rulebook = replace(ctx.rulebook, approved_by=body.approver)
+        # Resuming replays from the suspended step, and the calculation at
+        # step 16 already completed, so idempotent replay skips it — the
+        # schedule keeps the gate vector it was built with. Recalculate
+        # explicitly so the quantities are evaluated against the rulebook that
+        # has now been signed. This is the same path every clarification
+        # takes, so it is well travelled rather than a special case.
+        run = rerun(ctx, ctx.project_id)
+
         # Release is decided per calculation *subject* (element/claim key),
         # so the sign-off has to land on the same subjects the calculation
         # used, not a generic "rulebook" label, or release_status never sees it.

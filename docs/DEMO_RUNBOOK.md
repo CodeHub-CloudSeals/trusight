@@ -29,6 +29,12 @@ Run these in order. Every one is a hard gate except where marked.
 | 11 | Browser | open `$URL` | sign-in screen loads, no console errors |
 | 12 | Roles | `curl -s -X POST $URL/runs/<id>/clarifications -H 'x-trustsight-user: commercial@demo-client.com' …` | **403** — a Viewer is refused by the API, not by a hidden button |
 | 13 | Ask | ask it something ungroundable in the UI | it declines rather than guessing |
+| 14 | Interface | `python deploy/verify_ui.py $URL` | `ALL CHECKS PASSED` — contrast at AA on every screen in both themes, no sideways scroll at phone width, no console errors |
+
+Check 14 walks the app through its own router — sign in, open the project,
+visit every tab — and measures what is actually painted. It asserts the tabs
+render distinctly, because an earlier version of this check navigated nowhere
+and reported nine clean screens while measuring the sidebar nine times.
 
 `mode: cloud` is a stop. It routes runs to Step Functions, where several
 Lambda handlers still raise `NotImplementedError`. Unset `STATE_MACHINE_ARN`

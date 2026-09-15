@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>TrustSight · Engineering workspace</title>
 <link rel="icon" type="image/svg+xml" href="/assets/logo.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<!-- No web font. The runbook contemplates running this offline on a laptop,
+     and a render-blocking stylesheet from a third party would hold first paint
+     at the exact moment the session starts. The stack below resolves to the
+     platform UI font, so what was verified for contrast and layout is what the
+     room sees, online or not. -->
 <link rel="stylesheet" href="/assets/workspace.css">
 <script>
   /* Set the theme before first paint so the demo never flashes white. */

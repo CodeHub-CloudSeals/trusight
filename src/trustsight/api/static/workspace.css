@@ -42,7 +42,10 @@
   --t-body: 14px;  --t-lg: 16px;   --t-xl: 20px;    --t-2xl: 26px;
   --t-3xl: 32px;   --t-4xl: 40px;
 
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Platform UI font, never fetched. "Inter" leads only so a machine that has
+     it installed locally uses it; nothing is downloaded either way. */
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text",
+          "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Consolas, monospace;
 
   /* Radius & elevation */
@@ -68,8 +71,12 @@
   --navy: #0a2a5e;            /* 13.05:1 on canvas */
   --ink: #17233b;             /* 14.66:1 */
   --ink-2: #33415c;
-  --muted: #55647f;
-  --faint: #76859c;
+  --muted: #55647f;          /* 5.97:1 on surface */
+  /* --faint carries the source line under every extracted drawing fact, which
+     is small body text and therefore AA at 4.5:1 — not decoration. It must
+     also clear the tinted --accent-soft background a selected fact row uses,
+     which is the tighter of the two: 5.40:1 on white, 4.76:1 on the tint. */
+  --faint: #5b6b86;
 
   /* Navigation shell — navy */
   --nav: #0a2a5e;
@@ -135,8 +142,9 @@
   --navy: #cfe2ff;
   --ink: #e9f1fb;
   --ink-2: #c0d0e6;
-  --muted: #93a6c2;
-  --faint: #7a8da9;
+  --muted: #93a6c2;          /* 6.38:1 on surface */
+  /* same rule as light: 6.01:1 on surface, 4.97:1 over the selected-row tint */
+  --faint: #8fa1bb;
 
   --nav: #061225;
   --nav-2: #0a1c38;
@@ -298,8 +306,19 @@ small { display: block; color: var(--muted); font-size: var(--t-tiny); margin-to
   font-size: var(--t-small);
   background: var(--nav-2);
 }
-.workspace-switch > span:last-child { margin-left: auto; color: var(--nav-ink-faint); }
+.workspace-switch > span:last-child { margin-left: auto; color: var(--nav-ink-faint); flex-shrink: 0; }
 .workspace-switch small, .profile small { color: var(--nav-ink-faint); font-size: var(--t-micro); }
+/* Real project names are long ("Project 5 - Atlanic Cages", "Atlantic Cages
+   (seeded walkthrough)"). Left to wrap, the card grew to five lines and the
+   chevron drifted into the text. One line each, truncated, fixed height. */
+.workspace-switch > div { min-width: 0; flex: 1; text-align: left; }
+.workspace-switch > div,
+.workspace-switch small,
+.profile > div,
+.profile small {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.workspace-switch small, .profile small { line-height: 1.5; }
 
 .avatar {
   display: grid;
@@ -1482,3 +1501,8 @@ body.stage-open .sidebar, body.stage-open .app { display: none; }
   border-top: 1px dashed var(--line);
   font-size: var(--t-micro); line-height: 1.55;
 }
+.approval-card.is-waiting { border-left-color: var(--line-strong); }
+.impact-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); margin-top: var(--s-3); }
+.impact-pair > div { padding-left: var(--s-3); border-left: 2px solid var(--line); }
+.impact-pair strong { display: block; font-size: var(--t-2xl); font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.impact-pair small { color: var(--muted); font-size: var(--t-micro); }
