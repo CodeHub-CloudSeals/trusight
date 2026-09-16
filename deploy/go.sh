@@ -31,7 +31,7 @@ bold "TrustSight deploy — region ${REGION}"
 echo
 
 # ── 1. what the build needs ──────────────────────────────────────────────────
-bold "1 / 5  Preflight"
+bold "1 / 6  Preflight"
 
 command -v aws >/dev/null \
   || stop "the aws CLI is not installed" \
@@ -80,7 +80,7 @@ ok "App Runner reachable in ${REGION}"
 # a machine someone put them on. Building without them produces an image that
 # starts cleanly and has no client drawings in it — the failure that looks
 # fine in a script and is discovered on stage.
-bold "2 / 5  Demo data in the build context"
+bold "2 / 6  Demo data in the build context"
 
 PDFS="$(find data/corpus -name '*.pdf' 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$PDFS" -lt 2 ]; then
@@ -118,26 +118,74 @@ if ! git diff --quiet 2>/dev/null; then
 fi
 echo
 
-# ── 3. deploy ────────────────────────────────────────────────────────────────
-bold "3 / 5  Build and deploy"
+# ── 3. which service, and will the URL survive ───────────────────────────────
+#
+# App Runner gives a service its URL at creation and never changes it, so an
+# update keeps the address a client already has. A *create* mints a new one.
+# The deploy picks between them by service name, which means a rename, a typo
+# or the wrong region silently produces a second service on a new URL while
+# the old one keeps serving the old build. That is the failure where the room
+# is looking at a URL nobody redeployed.
+#
+# So: resolve the URL before touching anything, say which way this will go,
+# and compare again afterwards.
+bold "3 / 6  Target service"
+
+BEFORE="$(aws apprunner list-services --region "$REGION" \
+          --query "ServiceSummaryList[?ServiceName=='${APP}'].ServiceUrl | [0]" \
+          --output text 2>/dev/null)"
+
+if [ -n "$BEFORE" ] && [ "$BEFORE" != "None" ]; then
+  ok "updating ${APP} in place"
+  info "https://${BEFORE}"
+  info "App Runner keeps this address across an update — it will not change"
+else
+  warn "no service named '${APP}' in ${REGION}"
+  info "this run would CREATE one, and a new service gets a NEW URL."
+  info ""
+  info "services that do exist in ${REGION}:"
+  aws apprunner list-services --region "$REGION" \
+      --query "ServiceSummaryList[].[ServiceName,ServiceUrl]" --output text 2>/dev/null \
+    | while read -r n u; do info "  ${n}  https://${u}"; done
+  info ""
+  info "if the demo is one of those under a different name, stop now and set"
+  info "APP to that name at the top of deploy/go.sh and deploy-apprunner.sh."
+  info "check the other region too:  aws apprunner list-services --region eu-west-2"
+  info ""
+  printf '        type CREATE to make a new service on a new URL: '
+  read -r CONFIRM
+  [ "$CONFIRM" = "CREATE" ] || stop "stopped without deploying — nothing was changed"
+fi
+echo
+
+# ── 4. deploy ────────────────────────────────────────────────────────────────
+bold "4 / 6  Build and deploy"
 info "this takes 5-10 minutes, most of it the first docker build"
 echo
 AWS_REGION="$REGION" ./deploy/deploy-apprunner.sh || stop "the deploy failed — see the output above"
 echo
 
-# ── 4. find the URL ──────────────────────────────────────────────────────────
-bold "4 / 5  Live service"
+# ── 5. confirm the address did not move ──────────────────────────────────────
+bold "5 / 6  Live service"
 URL="$(aws apprunner list-services --region "$REGION" \
         --query "ServiceSummaryList[?ServiceName=='${APP}'].ServiceUrl | [0]" \
         --output text 2>/dev/null)"
 [ -n "$URL" ] && [ "$URL" != "None" ] \
   || stop "deployed, but the service URL could not be read back"
+
+if [ -n "$BEFORE" ] && [ "$BEFORE" != "None" ] && [ "$BEFORE" != "$URL" ]; then
+  stop "the URL CHANGED — it was https://${BEFORE} and is now https://${URL}" \
+       "an update should never do this. Something created a second service." \
+       "check before sharing the address:" \
+       "  aws apprunner list-services --region ${REGION}"
+fi
 BASE="https://${URL}"
 ok "$BASE"
+[ -n "$BEFORE" ] && [ "$BEFORE" != "None" ] && ok "same address as before the deploy"
 echo
 
 # ── 5. verify, against the runbook ───────────────────────────────────────────
-bold "5 / 5  Go / no-go against the live URL"
+bold "6 / 6  Go / no-go against the live URL"
 FAIL=0
 
 HEALTH="$(curl -s --max-time 20 "${BASE}/health" || true)"
